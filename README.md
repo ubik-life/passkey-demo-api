@@ -54,6 +54,7 @@ migrations/          ← Миграции БД (goose)
 
 | Файл | Содержание |
 |------|-----------|
+| [`00-setup.md`](devlog/00-setup.md) | Стартовая точка: как начать проект с нуля |
 | [`00-intent.md`](devlog/00-intent.md) | Намерение, API-контракт, архитектурные решения |
 | [`01-api-contract.md`](devlog/01-api-contract.md) | OpenAPI-спека |
 | `02-gherkin.md` | Компонентные тесты |
