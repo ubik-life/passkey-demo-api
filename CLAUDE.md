@@ -13,6 +13,7 @@ UI-часть: `git@github.com:ubik-life/passkey-demo-ui.git`
 
 ```
 devlog/
+  00-setup.md        ← стартовая точка: как начать проект с нуля
   00-intent.md       ← зачем строим, API-контракт, решения по архитектуре
   01-api-contract.md ← OpenAPI-спека
   02-gherkin.md      ← компонентные тесты
@@ -41,12 +42,28 @@ devlog/
 
 Цель — чтобы студент смог повторить весь путь шаг за шагом, работая с ИИ-агентом так же, как это делал автор. Журнал версионируется вместе с кодом.
 
+## Статус модулей
+
+| Модуль | Статус |
+|--------|--------|
+| OpenAPI-спека | done |
+| README.md | done |
+| Gherkin-сценарии | in_progress |
+| Go-сервер | todo |
+
+## Следующий шаг
+
+Шаг 2 — компонентные тесты на Gherkin. Ветка: `feat/gherkin`.
+
+Сценарии для: регистрация (фаза 1 + 2), вход (фаза 1 + 2), выход, `/users/me`.
+
 ## Принятые решения
 
 - REST API: двухфазные POST вместо PUT для завершения регистрации/входа (см. `devlog/00-intent.md`)
 - Термины `attestation` и `assertion` в URI — взяты из WebAuthn напрямую
 - Trunk Based Development: ветки живут 1–2 дня
 - Коммиты по Conventional Commits
+- Спека в `api-specification/openapi.yaml` (OpenAPI 3.1, versioning через `/v1/`)
 
 ## Правила работы агента
 
