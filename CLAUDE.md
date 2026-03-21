@@ -52,6 +52,23 @@ devlog/
 
 - После завершения каждого шага обновлять `backlog.md`: переносить выполненные задачи в раздел `## Done`, обновлять статусы.
 
+### Флоу завершения шага
+
+```
+# 1. Создать ветку и сделать коммит
+git checkout -b feat/<name>
+git add <files>
+git commit -m "feat(<scope>): <description>"
+git push -u origin feat/<name>
+
+# 2. Создать PR, дождаться мержа (делает разработчик)
+
+# 3. Забрать main и сразу создать ветку следующего шага
+git checkout main
+git pull origin main
+git checkout -b feat/<next-name>
+```
+
 ## Фрейм работы с агентом
 
 См. `AGENTS.md`.
