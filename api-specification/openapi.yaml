@@ -1,0 +1,428 @@
+openapi: 3.1.0
+
+info:
+  title: Passkey Demo API
+  version: 1.0.0
+  description: >
+    Полный цикл авторизации без паролей: WebAuthn + JWT (Ed25519) + SQLite.
+    Первый кирпич ноды Ubik.
+
+servers:
+  - url: http://localhost:8080/v1
+    description: Local development
+
+tags:
+  - name: registrations
+    description: Двухфазная регистрация пользователя по WebAuthn
+  - name: sessions
+    description: Двухфазный вход и выход
+  - name: users
+    description: Данные текущего пользователя
+
+paths:
+
+  /registrations:
+    post:
+      tags: [registrations]
+      summary: Создать challenge регистрации
+      description: >
+        Фаза 1. Принимает handle пользователя, возвращает
+        PublicKeyCredentialCreationOptions и id регистрационной сессии.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationInitRequest'
+      responses:
+        '201':
+          description: Challenge создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationInitResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /registrations/{id}/attestation:
+    post:
+      tags: [registrations]
+      summary: Завершить регистрацию
+      description: >
+        Фаза 2. Принимает attestation от аутентификатора, верифицирует,
+        сохраняет credential и возвращает пару JWT.
+      parameters:
+        - $ref: '#/components/parameters/RegistrationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttestationRequest'
+      responses:
+        '200':
+          description: Регистрация завершена, токены выданы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /sessions:
+    post:
+      tags: [sessions]
+      summary: Создать challenge входа
+      description: >
+        Фаза 1. Принимает handle пользователя, возвращает
+        PublicKeyCredentialRequestOptions и id сессии входа.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionInitRequest'
+      responses:
+        '201':
+          description: Challenge создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionInitResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /sessions/{id}/assertion:
+    post:
+      tags: [sessions]
+      summary: Завершить вход
+      description: >
+        Фаза 2. Принимает assertion от аутентификатора, верифицирует подпись,
+        обновляет счётчик и возвращает пару JWT.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssertionRequest'
+      responses:
+        '200':
+          description: Вход завершён, токены выданы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /sessions/current:
+    delete:
+      tags: [sessions]
+      summary: Выйти из сессии
+      description: Инвалидирует refresh token текущей сессии.
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Сессия завершена
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/me:
+    get:
+      tags: [users]
+      summary: Текущий пользователь
+      description: Возвращает данные пользователя из access token.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Данные пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    RegistrationId:
+      name: id
+      in: path
+      required: true
+      description: ID регистрационной сессии
+      schema:
+        type: string
+        format: uuid
+
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: ID сессии входа
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+
+    RegistrationInitRequest:
+      type: object
+      required: [handle]
+      properties:
+        handle:
+          type: string
+          minLength: 3
+          maxLength: 64
+          description: Уникальный идентификатор пользователя (логин)
+          example: alice
+
+    RegistrationInitResponse:
+      type: object
+      required: [id, options]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID регистрационной сессии
+        options:
+          $ref: '#/components/schemas/PublicKeyCredentialCreationOptions'
+
+    AttestationRequest:
+      type: object
+      required: [id, rawId, response, type]
+      properties:
+        id:
+          type: string
+          description: Base64URL-encoded credential id
+        rawId:
+          type: string
+          description: Base64URL-encoded raw credential id
+        response:
+          type: object
+          required: [clientDataJSON, attestationObject]
+          properties:
+            clientDataJSON:
+              type: string
+              description: Base64URL-encoded clientDataJSON
+            attestationObject:
+              type: string
+              description: Base64URL-encoded attestationObject
+        type:
+          type: string
+          enum: [public-key]
+
+    SessionInitRequest:
+      type: object
+      required: [handle]
+      properties:
+        handle:
+          type: string
+          minLength: 3
+          maxLength: 64
+          example: alice
+
+    SessionInitResponse:
+      type: object
+      required: [id, options]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID сессии входа
+        options:
+          $ref: '#/components/schemas/PublicKeyCredentialRequestOptions'
+
+    AssertionRequest:
+      type: object
+      required: [id, rawId, response, type]
+      properties:
+        id:
+          type: string
+          description: Base64URL-encoded credential id
+        rawId:
+          type: string
+          description: Base64URL-encoded raw credential id
+        response:
+          type: object
+          required: [clientDataJSON, authenticatorData, signature]
+          properties:
+            clientDataJSON:
+              type: string
+              description: Base64URL-encoded clientDataJSON
+            authenticatorData:
+              type: string
+              description: Base64URL-encoded authenticatorData
+            signature:
+              type: string
+              description: Base64URL-encoded signature
+            userHandle:
+              type: string
+              description: Base64URL-encoded user handle (опционально)
+        type:
+          type: string
+          enum: [public-key]
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token]
+      properties:
+        access_token:
+          type: string
+          description: JWT (Ed25519), короткоживущий
+        refresh_token:
+          type: string
+          description: Opaque token, долгоживущий
+
+    User:
+      type: object
+      required: [id, handle]
+      properties:
+        id:
+          type: string
+          format: uuid
+        handle:
+          type: string
+          example: alice
+
+    PublicKeyCredentialCreationOptions:
+      type: object
+      description: >
+        Подмножество PublicKeyCredentialCreationOptions (WebAuthn Level 2).
+        Передаётся напрямую в navigator.credentials.create().
+      required: [rp, user, challenge, pubKeyCredParams]
+      properties:
+        rp:
+          type: object
+          required: [name]
+          properties:
+            name:
+              type: string
+            id:
+              type: string
+        user:
+          type: object
+          required: [id, name, displayName]
+          properties:
+            id:
+              type: string
+              description: Base64URL-encoded user id
+            name:
+              type: string
+            displayName:
+              type: string
+        challenge:
+          type: string
+          description: Base64URL-encoded random challenge
+        pubKeyCredParams:
+          type: array
+          items:
+            type: object
+            required: [type, alg]
+            properties:
+              type:
+                type: string
+                enum: [public-key]
+              alg:
+                type: integer
+                description: COSE algorithm identifier (например -7 для ES256)
+        timeout:
+          type: integer
+        attestation:
+          type: string
+          enum: [none, indirect, direct, enterprise]
+          default: none
+
+    PublicKeyCredentialRequestOptions:
+      type: object
+      description: >
+        Подмножество PublicKeyCredentialRequestOptions (WebAuthn Level 2).
+        Передаётся напрямую в navigator.credentials.get().
+      required: [challenge]
+      properties:
+        challenge:
+          type: string
+          description: Base64URL-encoded random challenge
+        timeout:
+          type: integer
+        rpId:
+          type: string
+        allowCredentials:
+          type: array
+          items:
+            type: object
+            required: [type, id]
+            properties:
+              type:
+                type: string
+                enum: [public-key]
+              id:
+                type: string
+                description: Base64URL-encoded credential id
+        userVerification:
+          type: string
+          enum: [required, preferred, discouraged]
+          default: preferred
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: handle is required
+        details:
+          type: array
+          items:
+            type: string
+
+  responses:
+    ValidationError:
+      description: Данные не прошли валидацию
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: VALIDATION_ERROR
+            message: handle is required
+            details: []
+
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: NOT_FOUND
+            message: registration session not found
+
+    Unauthorized:
+      description: Токен отсутствует или недействителен
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: UNAUTHORIZED
+            message: invalid or expired token
