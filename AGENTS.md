@@ -116,7 +116,7 @@ backlog.md (задача)
       ↓
 API-контракт (OpenAPI / AsyncAPI) — merge в main
       ↓
-README.md (Структура постановки задачи) — merge в main
+README.md — заполнить по разделу «Структура постановки задачи в README» — merge в main
       ↓
 Компонентные тесты на Gherkin (красные) — merge в main
       ↓
