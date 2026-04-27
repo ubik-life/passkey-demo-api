@@ -1,0 +1,13 @@
+# Go
+*.test
+*.out
+coverage.txt
+
+# Локальные SQLite-артефакты, если что-то протекло наружу
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store

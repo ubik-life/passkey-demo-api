@@ -20,6 +20,7 @@ devlog/
   03-go-server.md                ← TDD-цикл: Go-сервер
   04-component-tests-skill.md    ← SKILL.md для агента (генерация компонентных тестов)
   05-failure-modes.md            ← режимы отказа: контракт, спека, карта в README
+  06-component-tests-template.md ← шаблон godog в Docker, placeholder-сервис, smoke
 ```
 
 ### Формат каждого файла devlog
@@ -50,14 +51,15 @@ devlog/
 |--------|--------|
 | OpenAPI-спека | done |
 | README.md | done |
-| Gherkin-сценарии | in_progress |
+| Шаблон компонентных тестов (Шаг 2.0) | done |
+| Gherkin-сценарии (Шаг 2) | todo (sonnet) |
 | Go-сервер | todo |
 
 ## Следующий шаг
 
-Шаг 2.0 — шаблон компонентных тестов на Go (godog в Docker, аналог JVM mq-rest-sync-adapter). 14 тикетов в `backlog.md`, делается opus или человеком, не sonnet.
+Шаг 2 — sonnet пишет 4 `.feature`-файла (8 сценариев) по плану T2.1–T2.7 в `backlog.md`. Шаблон уже готов, smoke зелёный: `cd component-tests && ./scripts/run-tests.sh`.
 
-После 2.0 — Шаг 2: контракт зафиксирован (OpenAPI 503 `db_locked` + 507 `db_disk_full`; Карта режимов отказа в README — 2 строки). Раскладка: 4 файла, 8 сценариев. Тикеты T2.1–T2.7 — для sonnet, каждый самодостаточный промпт.
+После Шага 2 — Шаг 3 (TDD-цикл по модулям, постепенное вытеснение placeholder в `cmd/api/main.go` реальной логикой).
 
 ## Принятые решения
 

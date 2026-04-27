@@ -1,0 +1,23 @@
+# Контейнер для godog-раннера. Запускается через `docker compose run runner`
+# (или `docker compose up`), не с хоста — обеспечивает полную изоляцию
+# окружения. Включает CGO + sqlite-dev: для сценария db_locked раннер
+# открывает свой коннект к SQLite через mattn/go-sqlite3.
+
+FROM golang:1.26-alpine
+
+RUN apk add --no-cache bash curl gcc musl-dev sqlite sqlite-dev
+
+WORKDIR /tests
+
+# Сначала только go.mod/go.sum — для кеширования слоя зависимостей.
+COPY component-tests/go.mod component-tests/go.sum ./
+RUN go mod download
+
+COPY component-tests/steps ./steps
+COPY component-tests/features ./features
+COPY component-tests/fixtures ./fixtures
+COPY component-tests/scripts ./scripts
+
+ENV CGO_ENABLED=1
+
+ENTRYPOINT ["go", "test", "-v", "-count=1", "./steps/..."]
