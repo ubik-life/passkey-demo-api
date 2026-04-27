@@ -43,6 +43,10 @@ paths:
                 $ref: '#/components/schemas/RegistrationInitResponse'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '507':
+          $ref: '#/components/responses/InsufficientStorage'
 
   /registrations/{id}/attestation:
     post:
@@ -70,6 +74,10 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '507':
+          $ref: '#/components/responses/InsufficientStorage'
 
   /sessions:
     post:
@@ -95,6 +103,10 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '507':
+          $ref: '#/components/responses/InsufficientStorage'
 
   /sessions/{id}/assertion:
     post:
@@ -122,6 +134,10 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '507':
+          $ref: '#/components/responses/InsufficientStorage'
 
   /sessions/current:
     delete:
@@ -135,6 +151,10 @@ paths:
           description: Сессия завершена
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '507':
+          $ref: '#/components/responses/InsufficientStorage'
 
   /users/me:
     get:
@@ -152,6 +172,8 @@ paths:
                 $ref: '#/components/schemas/User'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
 components:
 
@@ -386,6 +408,10 @@ components:
       properties:
         code:
           type: string
+          description: >
+            Машиночитаемый код ошибки. Для 5xx — идентификатор различимого
+            режима отказа интеграции (см. README раздел «Карта режимов отказа»).
+            Для 4xx — доменная ошибка.
           example: VALIDATION_ERROR
         message:
           type: string
@@ -426,3 +452,36 @@ components:
           example:
             code: UNAUTHORIZED
             message: invalid or expired token
+
+    ServiceUnavailable:
+      description: >
+        Сервис временно не способен обработать запрос из-за блокировки БД
+        (SQLite lock contention). Клиент должен повторить запрос с учётом
+        заголовка `Retry-After`. Полная карта режимов отказа интеграций —
+        в README, раздел «Карта режимов отказа».
+      headers:
+        Retry-After:
+          description: Рекомендуемая задержка перед повторной попыткой в секундах.
+          schema:
+            type: integer
+            example: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: db_locked
+            message: database is locked, retry shortly
+
+    InsufficientStorage:
+      description: >
+        Запись в БД невозможна — диск переполнен. Retry от клиента
+        не поможет: требуется операционное вмешательство.
+        Возвращается только на эндпоинтах, которые пишут в БД.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: db_disk_full
+            message: storage exhausted, write rejected
