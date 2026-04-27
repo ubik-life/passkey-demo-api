@@ -13,11 +13,12 @@ UI-часть: `git@github.com:ubik-life/passkey-demo-ui.git`
 
 ```
 devlog/
-  00-setup.md        ← стартовая точка: как начать проект с нуля
-  00-intent.md       ← зачем строим, API-контракт, решения по архитектуре
-  01-api-contract.md ← OpenAPI-спека
-  02-gherkin.md      ← компонентные тесты
-  03-go-server.md    ← TDD-цикл: Go-сервер
+  00-setup.md                    ← стартовая точка: как начать проект с нуля
+  00-intent.md                   ← зачем строим, API-контракт, решения по архитектуре
+  01-api-contract.md             ← OpenAPI-спека
+  02-gherkin.md                  ← компонентные тесты
+  03-go-server.md                ← TDD-цикл: Go-сервер
+  04-component-tests-skill.md    ← SKILL.md для агента (генерация компонентных тестов)
 ```
 
 ### Формат каждого файла devlog
@@ -56,6 +57,7 @@ devlog/
 Шаг 2 — компонентные тесты на Gherkin. Ветка: `feat/gherkin`.
 
 Сценарии для: регистрация (фаза 1 + 2), вход (фаза 1 + 2), выход, `/users/me`.
+Генерировать по процедуре `skills/component-tests/SKILL.md` — должно получиться ровно 7 сценариев (6 happy-path + 1 отказ SQLite).
 
 ## Принятые решения
 
@@ -64,6 +66,8 @@ devlog/
 - Trunk Based Development: ветки живут 1–2 дня
 - Коммиты по Conventional Commits
 - Спека в `api-specification/openapi.yaml` (OpenAPI 3.1, versioning через `/v1/`)
+- Компонентные тесты: формула `N_тестов = N_эндпоинтов_API + Σ режимы отказа`. Для passkey-demo-api — 6 эндпоинтов + 1 режим SQLite = 7 сценариев. Контракт первичен: режимы отказа в OpenAPI и README, не в коде. Процедура — `skills/component-tests/SKILL.md`
+- Карта режимов отказа живёт в README отдельным разделом (видимый контракт сервиса наружу), а не в AsyncAPI и не в коде адаптера
 
 ## Фрейм работы с агентом
 
