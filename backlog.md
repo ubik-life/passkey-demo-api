@@ -67,7 +67,7 @@ component-tests/
 - [x] **T2.0.11 — `README.md` и `HOW-TO.md` в `component-tests/`.** README — тактический (как запустить, профили, список степов с регулярками, troubleshooting). HOW-TO — методология (зачем тесты, формула, почему Docker, почему mattn, что НЕ проверять, TDD-red phase). В обоих документах явно: `go test` с хоста не запускается никогда.
 - [x] **T2.0.12 — Smoke-проверка (`features/smoke.feature`).** Один сценарий: `GET /v1/users/me` → `501 Not Implemented` + `code=NOT_IMPLEMENTED`. Использует только HTTP-степы (не зависит от WebAuthn/auth/db_failure). End-to-end прогнан через `./scripts/run-tests.sh`: 1 scenarios passed, 3 steps passed, exit 0. Обвязка работает.
 - [x] **T2.0.13 — Devlog 06.** Зафиксирован в `devlog/06-component-tests-template.md`: 6 промптов сессии, 7 архитектурных решений Q1–Q7, что построено в Stages A/B/C, итоговое решение по `AGENTS.md §10`.
-- [ ] **T2.0.14 — Merge в main** (PR создаётся в финальном коммите).
+- [x] **T2.0.14 — Merge в main** (PR создаётся в финальном коммите).
 
 **Важно:** Шаг 2.0 выполняется **до** T2.1. Без него sonnet будет писать `.feature` под несуществующие степы.
 
