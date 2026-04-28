@@ -102,9 +102,9 @@ component-tests/
 
 - [x] **T2.2 — `sessions.feature`.** По SKILL и OpenAPI (`/sessions`, `/sessions/{id}/assertion`) сгенерируй `component-tests/sessions.feature` с тремя сценариями: (1) happy-path `POST /v1/sessions` известный handle → `201 {id, options}`, challenge сохранён; (2) happy-path `POST /v1/sessions/{id}/assertion` валидная подпись → `200 TokenPair`, сессия создана; (3) `db_locked` — `SQLITE_BUSY` на `POST /v1/sessions/{id}/assertion` → `503` с заголовком `Retry-After` и `error.code=db_locked`.
 
-- [ ] **T2.3 — `sessions-current.feature`.** По SKILL и OpenAPI (`DELETE /v1/sessions/current`) сгенерируй `component-tests/sessions-current.feature` с одним сценарием: запрос с валидным Bearer-токеном → `204`, refresh token инвалидирован в БД.
+- [x] **T2.3 — `sessions-current.feature`.** По SKILL и OpenAPI (`DELETE /v1/sessions/current`) сгенерируй `component-tests/sessions-current.feature` с одним сценарием: запрос с валидным Bearer-токеном → `204`, refresh token инвалидирован в БД.
 
-- [ ] **T2.4 — `users.feature`.** По SKILL и OpenAPI (`GET /v1/users/me`) сгенерируй `component-tests/users.feature` с одним сценарием: запрос с валидным Bearer-токеном → `200 User`, поля `id` и `handle` соответствуют пользователю из токена.
+- [x] **T2.4 — `users.feature`.** По SKILL и OpenAPI (`GET /v1/users/me`) сгенерируй `component-tests/users.feature` с одним сценарием: запрос с валидным Bearer-токеном → `200 User`, поля `id` и `handle` соответствуют пользователю из токена.
 
 - [ ] **T2.5 — Сверка.** Прогнать чек-лист SKILL: `4 файла = 4 ресурса`, `6 happy-path = 6 эндпоинтов`, `2 сценария отказа = 2 режима`. Каждый failure-сценарий привязан к **одному** эндпоинту — не дублировать. Если расхождение — зафиксировать в комментарии PR.
 
