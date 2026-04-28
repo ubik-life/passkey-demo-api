@@ -20,6 +20,7 @@ func (w *World) registerHTTPSteps(ctx *godog.ScenarioContext) {
 	ctx.Step(`^ответ (\d+)(?:\s|$)`, w.responseStatus)
 	ctx.Step(`^ответ содержит заголовок ([A-Za-z\-]+)$`, w.responseHasHeader)
 	ctx.Step(`^ответ содержит JSON-поле ([\w\.\[\]]+) со значением "([^"]*)"$`, w.responseJSONField)
+	ctx.Step(`^ответ содержит непустое JSON-поле ([\w\.\[\]]+)$`, w.responseJSONFieldNonEmpty)
 }
 
 // sendRequest выполняет HTTP-запрос без тела. Если в World уже есть
@@ -92,6 +93,25 @@ func (w *World) responseHasHeader(name string) error {
 	}
 	if w.lastResponse.Header.Get(name) == "" {
 		return fmt.Errorf("ожидали заголовок %q, не нашли в ответе", name)
+	}
+	return nil
+}
+
+// responseJSONFieldNonEmpty проверяет, что JSON-поле ответа присутствует и непустое.
+func (w *World) responseJSONFieldNonEmpty(field string) error {
+	if w.lastBody == nil {
+		return fmt.Errorf("ответ ещё не получен")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(w.lastBody, &parsed); err != nil {
+		return fmt.Errorf("ответ не валидный JSON: %w (тело: %s)", err, string(w.lastBody))
+	}
+	v, ok := parsed[field]
+	if !ok {
+		return fmt.Errorf("в ответе нет поля %q (тело: %s)", field, string(w.lastBody))
+	}
+	if fmt.Sprintf("%v", v) == "" {
+		return fmt.Errorf("поле %q пустое", field)
 	}
 	return nil
 }

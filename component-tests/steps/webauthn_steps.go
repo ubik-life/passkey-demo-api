@@ -19,8 +19,8 @@ import (
 // сбрасывается в afterScenario вместе со всем World).
 func (w *World) registerWebAuthnSteps(ctx *godog.ScenarioContext) {
 	ctx.Step(`^у пользователя "([^"]+)" есть виртуальный аутентификатор$`, w.givenVirtualAuthenticator)
-	ctx.Step(`^клиент собирает attestation для challenge с id "([^"]+)" и отправляет его$`, w.sendAttestation)
-	ctx.Step(`^клиент собирает assertion для challenge с id "([^"]+)" и отправляет его$`, w.sendAssertion)
+	ctx.Step(`^клиент собирает attestation из последнего ответа и отправляет его$`, w.sendAttestation)
+	ctx.Step(`^клиент собирает assertion из последнего ответа и отправляет его$`, w.sendAssertion)
 }
 
 // givenVirtualAuthenticator создаёт пустой виртуальный аутентификатор.
@@ -47,7 +47,7 @@ func (w *World) givenVirtualAuthenticator(handle string) error {
 //
 // challengeID берётся из аргумента шага (возвращён сервером в фазе 1)
 // и подставляется в URL.
-func (w *World) sendAttestation(challengeID string) error {
+func (w *World) sendAttestation() error {
 	if w.lastBody == nil {
 		return fmt.Errorf("нет options от фазы 1: сначала клиент должен получить challenge")
 	}
@@ -74,14 +74,14 @@ func (w *World) sendAttestation(challengeID string) error {
 
 	attResponse := virtualwebauthn.CreateAttestationResponse(w.rp, *w.authenticator, cred, *options)
 
-	w.challengeID = challengeID
-	path := fmt.Sprintf("/v1/registrations/%s/attestation", challengeID)
+	w.challengeID = phase1.ID
+	path := fmt.Sprintf("/v1/registrations/%s/attestation", phase1.ID)
 	return w.doRequest("POST", path, []byte(attResponse))
 }
 
 // sendAssertion: аналогично, но для фазы 2 входа. Использует уже
 // существующий credential.
-func (w *World) sendAssertion(challengeID string) error {
+func (w *World) sendAssertion() error {
 	if w.lastBody == nil {
 		return fmt.Errorf("нет options от фазы 1: сначала клиент должен получить challenge")
 	}
@@ -104,7 +104,7 @@ func (w *World) sendAssertion(challengeID string) error {
 
 	assResponse := virtualwebauthn.CreateAssertionResponse(w.rp, *w.authenticator, *w.credential, *options)
 
-	w.challengeID = challengeID
-	path := fmt.Sprintf("/v1/sessions/%s/assertion", challengeID)
+	w.challengeID = phase1.ID
+	path := fmt.Sprintf("/v1/sessions/%s/assertion", phase1.ID)
 	return w.doRequest("POST", path, []byte(assResponse))
 }
