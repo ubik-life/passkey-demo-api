@@ -134,6 +134,27 @@ component-tests/
 - [ ] Компонентные тесты зелёные
 - [ ] Merge в main
 
+### Шаг 4 — CI на PR
+
+Запускается **после Шагов 1–3** (контракт, тесты, реализация). Цель — каждый PR в `main` автоматически проверяется на:
+
+1. Валидность OpenAPI-спецификации.
+2. Сборку сервиса (`go build ./cmd/api`).
+3. Прогон компонентных тестов (`./scripts/run-tests.sh`).
+
+Аналог из JVM-мира — [`.gitlab-ci.yml` mq-rest-sync-adapter](https://github.com/codemonstersteam/mq-rest-sync-adapter/blob/main/.gitlab-ci.yml): три стадии `test-api-specification → unit-tests → component-tests` с `asyncapi validate` для контракта. У нас REST → валидируем `openapi.yaml`. У нас GitHub, не GitLab → пишем GitHub Actions в `.github/workflows/`.
+
+**Тикеты:**
+
+- [ ] **T4.1 — Валидация OpenAPI на PR.** GitHub Actions workflow `.github/workflows/validate-openapi.yml`. Тригер: `pull_request` + изменения в `api-specification/**`. Инструмент: `redocly/cli` (npx или Docker-образ) — стандарт для OpenAPI 3.x. Проверки: lint + spec validity. PR с битой спекой не мержится.
+- [ ] **T4.2 — Сборка сервиса в CI.** Workflow `.github/workflows/build-service.yml`: `go build ./cmd/api` на каждый PR. Защита от поломки сборки — компонентным тестам на сломанной сборке нет смысла гоняться.
+- [ ] **T4.3 — Прогон компонентных тестов в CI.** Workflow `.github/workflows/component-tests.yml`: запускает `./scripts/run-tests.sh` (профиль `healthy` всегда; `disk-full` — если в фиче пишется в БД). Зависит от T4.2 (сборка зелёная). Артефакты — лог godog для разбора падений.
+- [ ] **T4.4 — TODO: валидация документации (исследование).** Отдельная сессия: что значит «валидная документация»? Проверки на полноту README по требованиям AGENTS.md §19? Markdown-lint? Битые ссылки? Соответствие структуры devlog шаблону `docs/templates/devlog.md`? Связь Pipe-описаний эндпоинтов с реальными путями в OpenAPI? Результат исследования — отдельный план в backlog (T4.4.1+).
+- [ ] **T4.5 — Devlog 07.** Зафиксировать в `devlog/07-ci.md`.
+- [ ] **T4.6 — Merge в main.**
+
+**Зачем после Шага 3.** До Шага 3 реализации сервиса нет — компонентные тесты в CI проверяли бы только smoke (placeholder отдаёт 501), а это и так есть локально через `./scripts/run-tests.sh`. Реальная защита от регрессий включается, когда в Шаге 3 модули по одному вытесняют placeholder и сценарии становятся зелёными.
+
 ## Done
 
 - [x] `devlog/00-intent.md` — намерение, API-контракт, решения по архитектуре
