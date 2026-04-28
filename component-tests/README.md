@@ -69,12 +69,14 @@ SQLite-файлу и берёт `BEGIN EXCLUSIVE TRANSACTION`. SUT ловит `S
 - `клиент отправляет (GET|POST|PUT|DELETE) <path> с телом:` (DocString JSON)
 - `ответ <code>`
 - `ответ содержит заголовок <header>`
-- `ответ содержит JSON-поле <key> со значением "<value>"`
+- `ответ содержит JSON-поле <key> со значением "<value>"` — точное равенство
+- `ответ содержит непустое JSON-поле <key>` — присутствует и не пустое (для JWT, refresh token и других динамических значений)
+- `ответ содержит JSON-поле <key>` — просто присутствует, значение любое (для опциональных полей вроде `details: []`)
 
 **WebAuthn** (`webauthn_steps.go`) — через [descope/virtualwebauthn](https://github.com/descope/virtualwebauthn)
 - `у пользователя "<handle>" есть виртуальный аутентификатор`
-- `клиент собирает attestation для challenge с id "<id>" и отправляет его`
-- `клиент собирает assertion для challenge с id "<id>" и отправляет его`
+- `клиент собирает attestation и отправляет его` — challenge id читается из последнего ответа сервера (фаза 1 регистрации)
+- `клиент собирает assertion и отправляет его` — то же для фазы 2 входа
 
 **Failure** (`db_failure_steps.go`)
 - `БД заблокирована` — раннер берёт EXCLUSIVE-транзакцию
