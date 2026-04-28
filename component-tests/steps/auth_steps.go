@@ -27,20 +27,13 @@ func (w *World) userIsLoggedIn(handle string) error {
 	if w.lastResponse.StatusCode != 201 {
 		return fmt.Errorf("phase 1 register: ожидали 201, получили %d", w.lastResponse.StatusCode)
 	}
-	var p1 struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(w.lastBody, &p1); err != nil {
-		return fmt.Errorf("phase 1 register: parse: %w", err)
-	}
-
 	// Виртуальный аутентификатор для пользователя.
 	if err := w.givenVirtualAuthenticator(handle); err != nil {
 		return fmt.Errorf("setup authenticator: %w", err)
 	}
 
 	// Phase 2: attestation — завершить регистрацию, получить токен.
-	if err := w.sendAttestation(p1.ID); err != nil {
+	if err := w.sendAttestation(); err != nil {
 		return fmt.Errorf("phase 2 attestation: %w", err)
 	}
 	if w.lastResponse.StatusCode != 200 {
