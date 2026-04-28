@@ -1,0 +1,20 @@
+# Override-файл для профиля db_disk_full.
+# Запуск: docker compose -f docker-compose.test.yml -f docker-compose.disk-full.yml up
+#
+# Переопределяет named volume `sqlite-data` на tmpfs ограниченного размера.
+# 2 МБ хватает для пустой SQLite-БД, но первая же существенная запись
+# упрётся в `SQLITE_FULL` → SUT отдаёт 507 db_disk_full.
+
+services:
+  # Сервисы наследуют свои монтирования из базового compose;
+  # переопределяем только определение volume ниже.
+  service: {}
+  runner: {}
+
+volumes:
+  sqlite-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=2m

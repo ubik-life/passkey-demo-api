@@ -1,0 +1,61 @@
+# Компонентные тесты passkey-demo-api.
+# Запуск: ./scripts/run-tests.sh (см. component-tests/README.md).
+#
+# Два сервиса:
+#   - service: SUT (passkey-demo-api). Сейчас собирается из placeholder
+#     cmd/api/main.go (отдаёт 401 на всё, /health → 200). По мере Шага 3
+#     заменяется реальной реализацией.
+#   - runner: godog в контейнере, ждёт healthcheck сервиса и стреляет
+#     по нему через внутреннюю docker-сеть.
+#
+# SQLite-файл шарится между service и runner через named volume.
+# Это нужно для сценария db_locked — раннер открывает свой коннект
+# и держит EXCLUSIVE-транзакцию, SUT получает SQLITE_BUSY.
+#
+# Параметризация профилей (healthy / disk-full) — через переменные
+# окружения compose, файлы в ./compose/envs/ подгружаются скриптом
+# через --env-file.
+
+name: passkey-component-tests
+
+services:
+
+  service:
+    build:
+      context: ..
+      dockerfile: component-tests/compose/service.Dockerfile
+    environment:
+      SERVICE_ADDR: ":8080"
+      SQLITE_PATH: ${SQLITE_PATH:-/var/lib/passkey/data.db}
+    # Healthcheck определён в service.Dockerfile (HEALTHCHECK CMD wget ...).
+    # Runner ниже стартует только после `condition: service_healthy`.
+    volumes:
+      - sqlite-data:/var/lib/passkey
+    expose:
+      - "8080"
+    networks:
+      - test-net
+
+  runner:
+    build:
+      context: ..
+      dockerfile: component-tests/Dockerfile.runtime
+    environment:
+      SERVICE_BASE_URL: http://service:8080
+      SQLITE_PATH: ${SQLITE_PATH:-/var/lib/passkey/data.db}
+    depends_on:
+      service:
+        condition: service_healthy
+    volumes:
+      - sqlite-data:/var/lib/passkey
+    networks:
+      - test-net
+
+networks:
+  test-net:
+    driver: bridge
+
+volumes:
+  sqlite-data:
+    # Для disk-full профиля volume переопределяется на tmpfs через
+    # docker-compose.disk-full.yml (override-файл, добавится в Stage B).
