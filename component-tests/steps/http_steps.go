@@ -21,6 +21,7 @@ func (w *World) registerHTTPSteps(ctx *godog.ScenarioContext) {
 	ctx.Step(`^ответ содержит заголовок ([A-Za-z\-]+)$`, w.responseHasHeader)
 	ctx.Step(`^ответ содержит JSON-поле ([\w\.\[\]]+) со значением "([^"]*)"$`, w.responseJSONField)
 	ctx.Step(`^ответ содержит непустое JSON-поле ([\w\.\[\]]+)$`, w.responseJSONFieldNonEmpty)
+	ctx.Step(`^ответ содержит JSON-поле ([\w\.\[\]]+)$`, w.responseJSONFieldPresent)
 }
 
 // sendRequest выполняет HTTP-запрос без тела. Если в World уже есть
@@ -93,6 +94,24 @@ func (w *World) responseHasHeader(name string) error {
 	}
 	if w.lastResponse.Header.Get(name) == "" {
 		return fmt.Errorf("ожидали заголовок %q, не нашли в ответе", name)
+	}
+	return nil
+}
+
+// responseJSONFieldPresent проверяет, что JSON-поле ответа присутствует.
+// Значение может быть любым (включая пустую строку, null, пустой массив).
+// Используется для опциональных полей, чьё присутствие — часть контракта,
+// но значение неважно (например, `details: []` в ErrorResponse).
+func (w *World) responseJSONFieldPresent(field string) error {
+	if w.lastBody == nil {
+		return fmt.Errorf("ответ ещё не получен")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(w.lastBody, &parsed); err != nil {
+		return fmt.Errorf("ответ не валидный JSON: %w (тело: %s)", err, string(w.lastBody))
+	}
+	if _, ok := parsed[field]; !ok {
+		return fmt.Errorf("в ответе нет поля %q (тело: %s)", field, string(w.lastBody))
 	}
 	return nil
 }
