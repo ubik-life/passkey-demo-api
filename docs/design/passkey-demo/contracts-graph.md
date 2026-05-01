@@ -2,7 +2,7 @@
 
 Граф вызовов модулей слайсов и сверка согласованности контрактов (Шаг 9 `program-design.skill`).
 
-На текущей итерации (S1) граф нарисован для одного слайса — `registrations-start`. Слайсы 2-6 будут добавлены в следующих итерациях.
+На текущей итерации спроектированы графы слайсов 1 (`registrations-start`) и 2 (`registrations-finish`). Слайсы 3-6 будут добавлены в следующих итерациях.
 
 ---
 
@@ -118,11 +118,164 @@
 
 ---
 
+## Slice 02 — `registrations-finish`
+
+### Граф вызовов
+
+```
+[ HTTP POST /v1/registrations/{id}/attestation ]
+        |
+        | path-param {id} + body []byte
+        v
++-------------------------------------------------------+
+| ингресс-адаптер: HTTPHandler                          |
+|   parsePathAndBody: (id string, body []byte)          |
+|     -> RegistrationFinishRequest                      |
++-------------------------------------------------------+
+        |
+        | RegistrationFinishRequest
+        v
++-------------------------------------------------------+
+| головной модуль: ProcessRegistrationFinish            |
++-------------------------------------------------------+
+   |
+   |-- (1) NewRegistrationFinishCommand:
+   |        in:  RegistrationFinishRequest
+   |        out: (RegistrationFinishCommand, error)
+   |        delegates: RegistrationIDFromString(string) -> (RegistrationID, error)
+   |                   parseAttestation([]byte)         -> (ParsedAttestation, error)
+   |
+   |-- (2) loadRegistrationSession:
+   |        in:  RegistrationID
+   |        out: (RegistrationSession, error)
+   |        deps: *sql.DB
+   |        Failure: ErrSessionNotFound, ErrDBLocked
+   |
+   |-- (3) NewFreshRegistrationSession:                  [конструктор подтипа — подправило «не guard»]
+   |        in:  NewFreshSessionInput { Session, Now }
+   |        out: (FreshRegistrationSession, error)
+   |        Failure: ErrSessionExpired
+   |
+   |-- (4) verifyAttestation:
+   |        in:  AttestationVerification { Fresh, Parsed }
+   |        out: (VerifiedCredential, error)
+   |        deps: RPConfig (ID + Origin)
+   |        Failure: ErrAttestationInvalid
+   |
+   |-- (5) NewUser (с встроенным generateUserID):
+   |        in:  NewUserInput { ID, Handle, CreatedAt }
+   |        out: User                                    [без error]
+   |
+   |-- (6) NewCredential:
+   |        in:  NewCredentialInput { User, Verified, CreatedAt }
+   |        out: Credential                              [без error]
+   |
+   |-- (7) generateTokenPair:
+   |        in:  GenerateTokenPairInput { User, Now }
+   |        out: (IssuedTokenPair, error)
+   |        deps: ed25519.PrivateKey, JWTConfig, io.Reader
+   |        Failure: catastrophic (rand / sign)
+   |
+   |-- (8) finishRegistration:
+   |        in:  FinishRegistrationInput { User, Credential, RefreshTokenHash,
+   |                                       RefreshExpiresAt, RegistrationID }
+   |        out: error
+   |        deps: *sql.DB
+   |        Failure: ErrHandleTaken, ErrDBLocked, ErrDiskFull
+   |
+   |-- (9) buildResponse:
+   |        in:  BuildTokenPairView { Access, Refresh }
+   |        out: TokenPair                               [без error]
+   |
+   v
+[ ингресс-адаптер: formatResponse ]
+   |
+   |  Success:  TokenPair → 200 + JSON
+   |  Failure:  ErrInvalidRegID / ErrAttestationParse → 422 VALIDATION_ERROR
+   |            ErrSessionNotFound / ErrSessionExpired → 404 NOT_FOUND
+   |            ErrAttestationInvalid                  → 422 ATTESTATION_INVALID
+   |            ErrHandleTaken                         → 422 HANDLE_TAKEN
+   |            ErrDBLocked                            → 503 + Retry-After: 1 + db_locked
+   |            ErrDiskFull                            → 507 + db_disk_full
+   |            прочее                                  → 500 INTERNAL_ERROR
+   v
+[ HTTP response ]
+```
+
+### Таблица стрелок
+
+| #  | Кто вызывает              | Кого вызывает                   | Передаёт (data)                          | Получает обратно                       | Классы ошибок                                       |
+|----|---------------------------|---------------------------------|------------------------------------------|----------------------------------------|----------------------------------------------------|
+| A  | HTTP runtime              | ингресс-адаптер.parsePathAndBody| `(string, []byte)` (path + body)         | `RegistrationFinishRequest`             | I/O чтения тела → 400 (адаптер)                    |
+| B  | ингресс-адаптер           | `ProcessRegistrationFinish`     | `RegistrationFinishRequest`              | `(TokenPair, error)`                    | вся цепочка ниже                                    |
+| 1  | `ProcessRegistrationFinish`| `NewRegistrationFinishCommand` | `RegistrationFinishRequest`              | `(RegistrationFinishCommand, error)`    | `ErrInvalidRegID`, `ErrAttestationParse`            |
+| 1a | `NewRegistrationFinishCommand` | `RegistrationIDFromString`  | `string`                                 | `(RegistrationID, error)`               | `ErrInvalidRegID`                                   |
+| 1b | `NewRegistrationFinishCommand` | `parseAttestation`           | `[]byte`                                 | `(ParsedAttestation, error)`            | `ErrAttestationParse`                               |
+| 2  | `ProcessRegistrationFinish`| `loadRegistrationSession`      | `RegistrationID`                          | `(RegistrationSession, error)`          | `ErrSessionNotFound`, `ErrDBLocked`, низкоуровневые |
+| 3  | `ProcessRegistrationFinish`| `NewFreshRegistrationSession`  | `NewFreshSessionInput`                    | `(FreshRegistrationSession, error)`     | `ErrSessionExpired`                                  |
+| 4  | `ProcessRegistrationFinish`| `verifyAttestation`             | `AttestationVerification`                | `(VerifiedCredential, error)`           | `ErrAttestationInvalid`                              |
+| 5  | `ProcessRegistrationFinish`| `NewUser`                       | `NewUserInput`                            | `User`                                  | —                                                   |
+| 5a | `ProcessRegistrationFinish`| `generateUserID`                | void                                      | `UserID`                                | —                                                   |
+| 6  | `ProcessRegistrationFinish`| `NewCredential`                 | `NewCredentialInput`                      | `Credential`                            | —                                                   |
+| 7  | `ProcessRegistrationFinish`| `generateTokenPair`             | `GenerateTokenPairInput`                  | `(IssuedTokenPair, error)`              | catastrophic (→ 500)                                |
+| 8  | `ProcessRegistrationFinish`| `finishRegistration`            | `FinishRegistrationInput`                 | `error`                                 | `ErrHandleTaken`, `ErrDBLocked`, `ErrDiskFull`, низкоуровневые |
+| 9  | `ProcessRegistrationFinish`| `buildResponse`                 | `BuildTokenPairView`                      | `TokenPair`                             | —                                                   |
+| C  | ингресс-адаптер           | HTTP runtime (formatResponse)   | `TokenPair` или `error`                   | HTTP-ответ                               | маппинг `error` → 4xx/5xx                           |
+
+### Чек-лист сверки 9.3
+
+| # | (1) Тип на стрелке существует | (2) Имя сигнатуры совпадает | (3) Консеквент A ⊆ антецеденту B | (4) Тип ошибки согласован | (5) Покрытие Gherkin | (6) Один data-аргумент |
+|---|-----|-----|-----|-----|-----|-----|
+| A  | [x] `string`, `[]byte`, `RegistrationFinishRequest` | [x] handler.parsePathAndBody | [x] адаптер требует только синтаксически валидный путь и тело | [x] провал чтения тела → 400 (локально) | [x] неявно (Then 200/507 включают парсинг) | [x] один аргумент: `RegistrationFinishRequest` (path+body — поля одной DTO) |
+| B  | [x] `RegistrationFinishRequest`, `TokenPair`, `error` | [x] `ProcessRegistrationFinish` | [x] head принимает любой Request; внутренняя валидация в (1) | [x] все ошибки ниже маппятся адаптером | [x] Then «ответ 200» Success-ветка B; Then «ответ 507» Failure-ветка B | [x] один data-аргумент `req`; `Deps` отдельно |
+| 1  | [x] `RegistrationFinishRequest`, `RegistrationFinishCommand` | [x] `NewRegistrationFinishCommand` | [x] head передаёт уже распарсенный req | [x] `ErrInvalidRegID`/`ErrAttestationParse` маппятся в 422 | [x] неявно (Then 200) | [x] один аргумент `req` |
+| 1a | [x] `string`, `RegistrationID` | [x] `RegistrationIDFromString` (S1 рехидратор) | [x] строка из path-параметра | [x] `ErrInvalidRegID` пробрасывается через `%w` | [x] неявно | [x] один аргумент |
+| 1b | [x] `[]byte`, `ParsedAttestation` | [x] `parseAttestation` | [x] байты тела запроса | [x] `ErrAttestationParse` пробрасывается через `%w` | [x] неявно | [x] один аргумент |
+| 2  | [x] `RegistrationID`, `RegistrationSession`, `error` | [x] `loadRegistrationSession` | [x] `id` валиден из (1); миграция 0001 применена | [x] `ErrSessionNotFound` → 404; `ErrDBLocked` → 503; прочее → 500 | [x] Success — Then 200; Failure-ветки — без отдельного Then на этом эндпоинте | [x] один data-аргумент `id` (db — dep) |
+| 3  | [x] `NewFreshSessionInput`, `FreshRegistrationSession`, `error` | [x] `NewFreshRegistrationSession` | [x] Session — валидная сущность из (2); Now — момент | [x] `ErrSessionExpired` → 404 | [x] неявно (Then 200) | [x] один аргумент `input` |
+| 4  | [x] `AttestationVerification`, `VerifiedCredential`, `error` | [x] `verifyAttestation` | [x] Fresh — non-expired; Parsed — синтаксически распарсенный | [x] `ErrAttestationInvalid` → 422 ATTESTATION_INVALID | [x] неявно (Then 200) | [x] один data-аргумент `input` (RPConfig — dep) |
+| 5  | [x] `NewUserInput`, `User` | [x] `NewUser` | [x] ID, Handle, CreatedAt — валидные | [x] нет ошибок | [x] неявно | [x] один аргумент `input` |
+| 5a | [x] `UserID` | [x] `generateUserID` | [x] нет антецедента | [x] нет ошибок | [x] неявно | [x] void |
+| 6  | [x] `NewCredentialInput`, `Credential` | [x] `NewCredential` | [x] User валиден; Verified — успех (4); CreatedAt — момент | [x] нет ошибок | [x] неявно | [x] один аргумент `input` |
+| 7  | [x] `GenerateTokenPairInput`, `IssuedTokenPair`, `error` | [x] `generateTokenPair` | [x] User валиден; Now — момент; signer непустой; TTL > 0 | [x] catastrophic → 500 | [x] Then «непустое access_token»/«непустое refresh_token» — поля выхода | [x] один data-аргумент `input` (signer/jwtCfg/rand — deps) |
+| 8  | [x] `FinishRegistrationInput`, `error` | [x] `finishRegistration` | [x] User, Credential, RefreshHash, RefreshExpiresAt, RegistrationID — валидны | [x] `ErrHandleTaken` → 422; `ErrDBLocked` → 503; `ErrDiskFull` → 507; прочее → 500 | [x] Then «507» — Failure: `ErrDiskFull`; Then «200» — Success | [x] один data-аргумент `input` (db — dep) |
+| 9  | [x] `BuildTokenPairView`, `TokenPair` | [x] `buildResponse` | [x] view собран из выходов (5)/(7) | [x] нет ошибок | [x] Then 200 (формат `access_token`/`refresh_token`) | [x] один аргумент `view` |
+| C  | [x] `TokenPair`, `error` | [x] handler.formatResponse | [x] head вернул либо Success, либо одну из известных ошибок | [x] полный маппинг в таблице ошибок карточки слайса | [x] Then 200 / 507 + `code=db_disk_full` | [x] один data-аргумент: либо `Response`, либо `error` |
+
+**Все стрелки помечены `[x] согласовано`.**
+
+### Покрытие Gherkin-сценариев графом (пункт 9.3.5)
+
+В Gherkin для эндпоинта S2 — 5 Then-шагов (3 в «Завершение регистрации», 2 в «Диск переполнен при завершении регистрации»). Все покрыты, см. таблицу `## Gherkin-mapping` в `slices/02-registrations-finish.md`.
+
+Цепочки:
+- Happy: B → 1 → 2 (Success) → 3 (Success) → 4 (Success) → 5 → 5a → 6 → 7 (Success) → 8 (Success) → 9 → C (200)
+- `db_disk_full`: B → 1 → 2 (Success) → 3 (Success) → 4 (Success) → 5 → 5a → 6 → 7 (Success) → 8 (Failure: ErrDiskFull) → C (507)
+
+Узлы графа, не упомянутые ни одним Then-шагом, **нет**. Failure-ветки (1)/(1a)/(1b)/(2 ErrSessionNotFound, ErrDBLocked)/(3)/(4)/(7)/(8 ErrHandleTaken, ErrDBLocked) — пути, которые на этом эндпоинте Gherkin не проверяет (по сознательной раскладке: `db_locked` → слайс 4; валидационные/доменные ошибки — задача юнит-тестов конструкторов и контракта OpenAPI). Это **не** мёртвая логика — часть декларированного OpenAPI-контракта.
+
+### Сверка по правилу «один аргумент» (пункт 9.3.6)
+
+Все стрелки графа несут **ровно одну** data-сущность. Зависимости (`*sql.DB`, `RPConfig`, `ed25519.PrivateKey`, `JWTConfig`, `io.Reader`) на стрелках не отображены — они в `Dependencies:` контракта модуля.
+
+### Применение подправила «подтип, не guard» (Шаг 3 скилла)
+
+Узел (3) `NewFreshRegistrationSession` — конструктор подтипа `FreshRegistrationSession`, инвариант «не истекла» закреплён в типе. Узлы (4) и (5) принимают `FreshRegistrationSession` (не сырой `RegistrationSession`), что гарантировано системой типов.
+
+Нет узлов со «висящей» сигнатурой `(Domain) -> ()` или `(input) -> error` — все логические шаги либо возвращают новую доменную структуру (1, 3, 4, 5, 6, 7, 9), либо являются I/O-эффектом с `error` (2, 8, и узел C-маппинг). Правило соблюдено.
+
+---
+
 ## I/O без юнитов (сверка с Шагом 8.1)
 
 В таблице юнит-тестов карточки слайса 1 нет:
 - `persistRegistrationSession` (I/O — труба);
 - ингресс-адаптера (парсинг и маппинг — компонентным).
+
+В таблице юнит-тестов карточки слайса 2 нет:
+- `loadRegistrationSession` (I/O — труба);
+- `finishRegistration` (I/O — труба, write-tx);
+- ингресс-адаптера (парсинг path/body и маппинг — компонентным).
 
 Это соответствует жёсткому правилу Шага 8.1: I/O проверяется только компонентными сценариями, формула юнит-тестов считается только для модулей логики и конструкторов.
 
@@ -130,15 +283,30 @@
 
 ## Каталог сообщений: транзитивная замкнутость (9.1)
 
-Прошёл `messages.md`:
+Прошёл `messages.md` для слайсов 1 и 2:
 
+**Слайс 1:**
 - `RegistrationStartRequest` — все поля примитивы.
-- `Handle`, `Challenge`, `RegistrationID` — конструктор-валидируемые. У каждого описан конструктор `NewT(...) -> (T, error)` или генератор без ошибки.
-- `RegistrationStartCommand`, `RegistrationSession` — собираются конструкторами из доменных значений.
-- `NewRegistrationSessionInput`, `RegistrationStartView` — value-агрегаторы для соблюдения «один data-аргумент»; не имеют конструктора (Go-литерал структуры на месте сборки).
-- `CreationOptions`, `RPInfo`, `UserInfo`, `PubKeyCredParam` — DTO-схемы по OpenAPI; собираются `buildCreationOptions`.
-- `RegistrationStartResponse` — DTO ответа; собирается `buildResponse`.
-- Sentinel-ошибки `ErrHandle*`, `ErrDBLocked`, `ErrDiskFull` — определены в `messages.md`.
-- `RPConfig` — value-объект конфига, передаётся как dep.
+- `Handle`, `Challenge`, `RegistrationID` — конструктор-валидируемые. У каждого описан конструктор `NewT(...) -> (T, error)` или генератор без ошибки. **Дополнительно для S2** добавлены рехидраторы `ChallengeFromBytes`, `RegistrationIDFromString`.
+- `RegistrationStartCommand`, `RegistrationSession` — собираются конструкторами. **Дополнительно для S2** добавлен рехидратор `RegistrationSessionFromRow`.
+- `NewRegistrationSessionInput`, `RegistrationStartView` — value-агрегаторы.
+- `CreationOptions`, `RPInfo`, `UserInfo`, `PubKeyCredParam` — DTO-схемы по OpenAPI.
+- `RegistrationStartResponse` — DTO ответа.
+- Sentinel-ошибки `ErrHandle*`, `ErrDBLocked`, `ErrDiskFull` — определены.
+- `RPConfig` — value-объект конфига. **В S2 расширяется** полем `Origin`.
 
-Ни одного «потом доопределим». Каталог замкнут.
+**Слайс 2:**
+- `RegistrationFinishRequest` — поля `string` + `[]byte`.
+- `ParsedAttestation` — обёртка над `*protocol.ParsedCredentialCreationData` (внешний тип go-webauthn). Конструктор `parseAttestation([]byte) -> (ParsedAttestation, error)` описан.
+- `RegistrationFinishCommand` — собирается `NewRegistrationFinishCommand`.
+- `FreshRegistrationSession` — конструктор подтипа `NewFreshRegistrationSession(input) -> (FreshRegistrationSession, error)`; поля неэкспортируемые.
+- `NewFreshSessionInput`, `AttestationVerification`, `NewUserInput`, `NewCredentialInput`, `GenerateTokenPairInput`, `FinishRegistrationInput`, `BuildTokenPairView` — value-агрегаторы.
+- `VerifiedCredential` — собирается только `verifyAttestation`; поля неэкспортируемые.
+- `UserID` — генератор без ошибки.
+- `User`, `Credential` — собираются конструкторами `NewUser`, `NewCredential` (без ошибки, инварианты на нижних уровнях).
+- `AccessToken`, `IssuedRefreshToken`, `IssuedTokenPair` — value-объекты выхода `generateTokenPair`.
+- `TokenPair` — DTO ответа; собирается `buildResponse`.
+- `JWTConfig` — value-объект конфига.
+- Sentinel-ошибки `ErrInvalidRegID`, `ErrAttestationParse`, `ErrSessionNotFound`, `ErrSessionExpired`, `ErrAttestationInvalid`, `ErrHandleTaken` — определены. `ErrDBLocked`, `ErrDiskFull` — переиспользуются из S1.
+
+Ни одного «потом доопределим». Каталог замкнут для слайсов 1-2.
