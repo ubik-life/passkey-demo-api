@@ -12,9 +12,11 @@ RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /src
 
 # Контекст сборки — корень репозитория (см. docker-compose.test.yml).
-COPY go.mod ./
-# go.sum появится, когда будут реальные зависимости — пока опущено.
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY cmd ./cmd
+COPY internal ./internal
 
 ENV CGO_ENABLED=1
 ENV GOOS=linux
@@ -27,7 +29,8 @@ RUN go build \
 FROM alpine:3
 
 RUN apk add --no-cache ca-certificates wget && \
-    addgroup -S app && adduser -S -G app app
+    addgroup -S app && adduser -S -G app app && \
+    mkdir -p /var/lib/passkey && chown app:app /var/lib/passkey
 
 WORKDIR /app
 COPY --from=build /out/api /app/api

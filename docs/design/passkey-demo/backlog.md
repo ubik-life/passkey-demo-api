@@ -28,7 +28,7 @@
 - [x] **В таблице юнит-тестов каждой карточки слайса нет I/O-модулей и нет ингресс-адаптера: I/O — трубы, проверяются только компонентными сценариями (Шаг 8.1)**
 - [x] infrastructure.md — описан инфраструктурный модуль приложения
 - [x] backlog.md — тикеты по одному на slice, с зависимостями
-- [ ] Оператор аппрувит пакет — @<github-handle>, <YYYY-MM-DD>
+- [x] Оператор аппрувит пакет — @maxmorev, 2026-05-01
 
 > **Замечание о scope.** Хендофф-чеклист подтверждается **для слайса S1**. Для S2–S6 в этой итерации соответствующие пункты не применимы — их карточки будут спроектированы и согласованы отдельными итерациями. Это явный итеративный режим (см. `intent.md` «Итерационный режим»). Sonnet берёт из backlog только тот тикет, который в нём прописан.
 
@@ -50,20 +50,20 @@
 
 **Definition of Done:**
 
-- [ ] ингресс-адаптер реализован: парсит JSON в `RegistrationStartRequest`, без бизнес-валидации (HTTP handler в `internal/slice/registrations_start/`)
-- [ ] конструкторы доменных структур (`NewHandle`, `NewRegistrationStartCommand`, `NewRegistrationSession`) реализованы: проверяют антецедент, при невалидных данных возвращают ошибку (структура не создаётся)
-- [ ] модули логики (`generateChallenge`, `generateRegistrationID`, `buildCreationOptions`, `buildResponse`) реализованы, контракты выполнены
-- [ ] модуль I/O (`persistRegistrationSession`) реализован, оборачивает SQLITE_BUSY → `ErrDBLocked`, SQLITE_FULL → `ErrDiskFull`
-- [ ] головной модуль `ProcessRegistrationStart` реализован: пайп из 7 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`
-- [ ] миграция `internal/db/migrations/0001_registration_sessions.sql` создаёт таблицу `registration_sessions(id PRIMARY KEY, handle, challenge, expires_at)`
-- [ ] инфраструктурный модуль (`cmd/api/main.go`, `internal/app/`, `internal/db/`, `internal/clock/`) собран по `infrastructure.md`; placeholder из `devlog/06` заменён на реальный сервер с одним рабочим эндпоинтом и `/health`
-- [ ] слайс подключён через `registrations_start.Register(mux, deps)`: HTTP-роут `POST /v1/registrations` ведёт на ингресс-адаптер
-- [ ] юнит-тесты по формуле — **14 тестов на модули логики и головной модуль** (см. таблицу в карточке слайса), покрытие 100% по строкам и веткам логики; I/O-модуль и ингресс-адаптер юнитами не покрываются
-- [ ] компонентный сценарий `Сценарий: Создание challenge регистрации` (`component-tests/features/registrations.feature`) зелёный
-- [ ] остальные сценарии в `registrations.feature`, `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не должны** ломаться по фазе 1 регистрации (When «отправляет POST /v1/registrations» возвращает валидный `id` и `options`)
-- [ ] локальный CI зелёный (`go test ./...` для юнитов и `./component-tests/scripts/run-tests.sh` для компонентных)
-- [ ] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`)
-- [ ] `docs/design/passkey-demo/devlog.md` дополнен блоком S1 (формат: `## S1 — HTTP POST /v1/registrations (<YYYY-MM-DD>)` + что сделано / решения / что застряло / тесты)
+- [x] ингресс-адаптер реализован: парсит JSON в `RegistrationStartRequest`, без бизнес-валидации (HTTP handler в `internal/slice/registrations_start/`)
+- [x] конструкторы доменных структур (`NewHandle`, `NewRegistrationStartCommand`, `NewRegistrationSession`) реализованы: проверяют антецедент, при невалидных данных возвращают ошибку (структура не создаётся)
+- [x] модули логики (`generateChallenge`, `generateRegistrationID`, `buildCreationOptions`, `buildResponse`) реализованы, контракты выполнены
+- [x] модуль I/O (`persistRegistrationSession`) реализован, оборачивает SQLITE_BUSY → `ErrDBLocked`, SQLITE_FULL → `ErrDiskFull`
+- [x] головной модуль `ProcessRegistrationStart` реализован: пайп из 7 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`
+- [x] миграция `internal/db/migrations/0001_registration_sessions.sql` создаёт таблицу `registration_sessions(id PRIMARY KEY, handle, challenge, expires_at)`
+- [x] инфраструктурный модуль (`cmd/api/main.go`, `internal/app/`, `internal/db/`, `internal/clock/`) собран по `infrastructure.md`; placeholder из `devlog/06` заменён на реальный сервер с одним рабочим эндпоинтом и `/health`
+- [x] слайс подключён через `registrations_start.Register(mux, deps)`: HTTP-роут `POST /v1/registrations` ведёт на ингресс-адаптер
+- [x] юнит-тесты по формуле — **14 тестов на модули логики и головной модуль** (см. таблицу в карточке слайса), покрытие 100% по строкам и веткам логики; I/O-модуль и ингресс-адаптер юнитами не покрываются
+- [x] компонентный сценарий `Сценарий: Создание challenge регистрации` (`component-tests/features/registrations.feature`) зелёный
+- [x] остальные сценарии в `registrations.feature`, `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не должны** ломаться по фазе 1 регистрации (When «отправляет POST /v1/registrations» возвращает валидный `id` и `options`)
+- [x] локальный CI зелёный (`go test ./...` для юнитов и `./component-tests/scripts/run-tests.sh` для компонентных)
+- [x] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`)
+- [x] `docs/design/passkey-demo/devlog.md` дополнен блоком S1 (формат: `## S1 — HTTP POST /v1/registrations (<YYYY-MM-DD>)` + что сделано / решения / что застряло / тесты)
 - [ ] PR создан, описание заполнено по шаблону Шага 8 скилла sonnet'а
 - [ ] PR смержен в main, CI на main зелёный
 
