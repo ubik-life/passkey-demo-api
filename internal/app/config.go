@@ -5,25 +5,20 @@ import (
 	"os"
 	"time"
 
-	"github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
+	rf "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_finish"
+	s1 "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
 )
 
 // AppConfig — конфигурация приложения из переменных окружения.
 type AppConfig struct {
 	ListenAddr   string
 	DBPath       string
-	RP           registrations_start.RPConfig
+	RP           s1.RPConfig
 	ChallengeTTL time.Duration
-	JWT          JWTConfig
+	JWT          rf.JWTConfig
 }
 
-// JWTConfig — заглушка; используется в слайсах 2/4.
-type JWTConfig struct {
-	AccessTTL  time.Duration
-	RefreshTTL time.Duration
-}
-
-// LoadConfig читает конфиг из env; паникует при отсутствии обязательных переменных.
+// LoadConfig читает конфиг из env; возвращает ошибку при отсутствии обязательных переменных.
 func LoadConfig() (AppConfig, error) {
 	var errs []string
 
@@ -37,6 +32,16 @@ func LoadConfig() (AppConfig, error) {
 		errs = append(errs, err.Error())
 	}
 
+	accessTTL, err := parseDuration("PASSKEY_JWT_ACCESS_TTL", "15m")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
+	refreshTTL, err := parseDuration("PASSKEY_JWT_REFRESH_TTL", "720h")
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	if len(errs) > 0 {
 		return AppConfig{}, fmt.Errorf("config: %v", errs)
 	}
@@ -44,11 +49,17 @@ func LoadConfig() (AppConfig, error) {
 	return AppConfig{
 		ListenAddr: envOr("SERVICE_ADDR", ":8080"),
 		DBPath:     dbPath,
-		RP: registrations_start.RPConfig{
-			Name: envOr("PASSKEY_RP_NAME", "Passkey Demo"),
-			ID:   envOr("PASSKEY_RP_ID", "localhost"),
+		RP: s1.RPConfig{
+			Name:   envOr("PASSKEY_RP_NAME", "Passkey Demo"),
+			ID:     envOr("PASSKEY_RP_ID", "localhost"),
+			Origin: envOr("PASSKEY_RP_ORIGIN", "http://localhost"),
 		},
 		ChallengeTTL: ttl,
+		JWT: rf.JWTConfig{
+			AccessTTL:  accessTTL,
+			RefreshTTL: refreshTTL,
+			Issuer:     envOr("PASSKEY_JWT_ISSUER", "passkey-demo"),
+		},
 	}, nil
 }
 

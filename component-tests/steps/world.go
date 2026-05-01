@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cucumber/godog"
@@ -80,9 +81,25 @@ func (w *World) releaseLock(ctx context.Context) {
 	}
 }
 
+// cleanupDB удаляет все строки из всех таблиц и удаляет junk-файл диск-фул сценария.
+// Вызывается в начале каждого сценария для изоляции тестов.
+func (w *World) cleanupDB() {
+	_ = os.Remove(filepath.Join(filepath.Dir(w.sqlitePath), "junk.bin"))
+
+	db, err := sql.Open("sqlite3", w.sqlitePath)
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	for _, table := range []string{"refresh_tokens", "credentials", "users", "registration_sessions"} {
+		_, _ = db.Exec("DELETE FROM " + table)
+	}
+}
+
 // beforeScenario вызывается перед каждым сценарием через godog hooks.
 func (w *World) beforeScenario(ctx context.Context, _ *godog.Scenario) (context.Context, error) {
 	w.resetState()
+	w.cleanupDB()
 	return ctx, nil
 }
 

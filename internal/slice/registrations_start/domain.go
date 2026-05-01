@@ -2,6 +2,7 @@ package registrations_start
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,7 +94,55 @@ func NewRegistrationSession(input NewRegistrationSessionInput) RegistrationSessi
 	}
 }
 
-func (s RegistrationSession) ID() RegistrationID { return s.id }
-func (s RegistrationSession) Handle() Handle      { return s.handle }
+func (s RegistrationSession) ID() RegistrationID  { return s.id }
+func (s RegistrationSession) Handle() Handle       { return s.handle }
 func (s RegistrationSession) Challenge() Challenge { return s.challenge }
 func (s RegistrationSession) ExpiresAt() time.Time { return s.expiresAt }
+
+// ChallengeFromBytes восстанавливает Challenge из сырых байт БД.
+// Возвращает ошибку, если длина не равна 32.
+func ChallengeFromBytes(b []byte) (Challenge, error) {
+	if len(b) != 32 {
+		return Challenge{}, fmt.Errorf("challenge: expected 32 bytes, got %d", len(b))
+	}
+	var c Challenge
+	copy(c.bytes[:], b)
+	return c, nil
+}
+
+// RegistrationIDFromString восстанавливает RegistrationID из UUID-строки.
+func RegistrationIDFromString(s string) (RegistrationID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return RegistrationID{}, fmt.Errorf("registrationID: %w", err)
+	}
+	return RegistrationID{value: id}, nil
+}
+
+// RegistrationSessionFromRow восстанавливает сущность из строки БД.
+// Не валидирует доменные инварианты повторно.
+func RegistrationSessionFromRow(
+	rowID string,
+	rowHandle string,
+	rowChallenge []byte,
+	rowExpiresAtUnix int64,
+) (RegistrationSession, error) {
+	id, err := RegistrationIDFromString(rowID)
+	if err != nil {
+		return RegistrationSession{}, fmt.Errorf("session from row: %w", err)
+	}
+	handle, err := NewHandle(rowHandle)
+	if err != nil {
+		return RegistrationSession{}, fmt.Errorf("session from row: %w", err)
+	}
+	challenge, err := ChallengeFromBytes(rowChallenge)
+	if err != nil {
+		return RegistrationSession{}, fmt.Errorf("session from row: %w", err)
+	}
+	return RegistrationSession{
+		id:        id,
+		handle:    handle,
+		challenge: challenge,
+		expiresAt: time.Unix(rowExpiresAtUnix, 0).UTC(),
+	}, nil
+}

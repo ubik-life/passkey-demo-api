@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/ubik-life/passkey-demo-api/internal/app"
 	appdb "github.com/ubik-life/passkey-demo-api/internal/db"
 	"github.com/ubik-life/passkey-demo-api/internal/clock"
+	registrations_finish "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_finish"
 	registrations_start "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
 )
 
@@ -24,6 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	signer, err := app.GenerateSigner()
+	if err != nil {
+		log.Error("signer", "err", err)
+		os.Exit(1)
+	}
+
 	db, err := appdb.Open(cfg.DBPath)
 	if err != nil {
 		log.Error("db open", "err", err)
@@ -31,13 +39,14 @@ func main() {
 	}
 	defer db.Close()
 
-	deps := app.Build(cfg, db, log, clock.System{})
+	deps := app.Build(cfg, db, log, clock.System{}, signer, rand.Reader)
 
 	mux := chi.NewRouter()
 	mux.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	registrations_start.Register(mux, deps.RegistrationsStart)
+	registrations_finish.Register(mux, deps.RegistrationsFinish)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,
