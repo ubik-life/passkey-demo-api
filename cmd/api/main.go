@@ -1,32 +1,62 @@
-// Placeholder для Шага 2.0. Сервис биндится на порт, отдаёт 401 на всё, кроме
-// /health (200) — нужен для compose-healthcheck. Постепенно вытесняется реальной
-// логикой в Шаге 3 (TDD-цикл: модуль за модулем заменяет хендлеры).
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/ubik-life/passkey-demo-api/internal/app"
+	appdb "github.com/ubik-life/passkey-demo-api/internal/db"
+	"github.com/ubik-life/passkey-demo-api/internal/clock"
+	registrations_start "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
 )
 
 func main() {
-	addr := os.Getenv("SERVICE_ADDR")
-	if addr == "" {
-		addr = ":8080"
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	cfg, err := app.LoadConfig()
+	if err != nil {
+		log.Error("config", "err", err)
+		os.Exit(1)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	db, err := appdb.Open(cfg.DBPath)
+	if err != nil {
+		log.Error("db open", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	deps := app.Build(cfg, db, log, clock.System{})
+
+	mux := chi.NewRouter()
+	mux.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotImplemented)
-		_, _ = w.Write([]byte(`{"code":"NOT_IMPLEMENTED","message":"endpoint not implemented yet, see Шаг 3 in backlog.md"}`))
-	})
+	registrations_start.Register(mux, deps.RegistrationsStart)
 
-	log.Printf("placeholder service listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatal(err)
+	srv := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	go func() {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+		<-quit
+		log.Info("shutting down")
+		_ = srv.Close()
+	}()
+
+	log.Info("listening", "addr", cfg.ListenAddr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Error("listen", "err", err)
+		os.Exit(1)
 	}
 }
