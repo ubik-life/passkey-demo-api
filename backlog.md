@@ -116,23 +116,29 @@ component-tests/
 
 > Прочитай `AGENTS.md`, `CLAUDE.md`, `skills/component-tests/SKILL.md`, `api-specification/openapi.yaml`, README раздел «Карта режимов отказа», `component-tests/README.md` и `component-tests/HOW-TO.md` (готовый раннер из Шага 2.0), список доступных степов в `component-tests/steps/`. Реши тикет {T2.X} из `backlog.md`. Не выходи за рамки SKILL: один сценарий = одно утверждение спецификации; не склеивать фазы; никаких сценариев валидации полей и бизнес-логики; failure-сценарии не дублировать между файлами — каждый режим отказа привязан к единственному эндпоинту по раскладке в backlog. **Используй уже существующие степы**, не выдумывай новые формулировки — если для сценария не хватает степа, останови работу и сообщи. Перед коммитом покажи дифф и жди подтверждения.
 
-### Шаг 3 — Go-сервер (TDD-цикл)
-- [ ] Инициализировать Go-модуль, структуру директорий
-- [ ] Настроить конфигурацию через env (AGENTS.md §16)
-- [ ] Миграции БД через goose (AGENTS.md §15)
-- [ ] Модуль: хранилище пользователей и credential (SQLite)
-- [ ] Модуль: WebAuthn регистрация — фаза 1 (challenge)
-- [ ] Модуль: WebAuthn регистрация — фаза 2 (attestation)
-- [ ] Модуль: WebAuthn вход — фаза 1 (challenge)
-- [ ] Модуль: WebAuthn вход — фаза 2 (assertion)
-- [ ] Модуль: JWT (Ed25519) — выдача и валидация
-- [ ] Модуль: выход (инвалидация refresh token)
-- [ ] Модуль: `/users/me`
-- [ ] HTTP-роутер, middleware (auth, logging, trace_id)
-- [ ] Structured logging (JSON, trace_id, span_id)
-- [ ] Зафиксировать в `devlog/03-go-server.md`
-- [ ] Компонентные тесты зелёные
-- [ ] Merge в main
+### Шаг 3 — Go-сервер (slice-by-slice)
+
+Реализация идёт срезами (slice), а не плоским списком модулей. Проектирование каждого slice'а — итерация opus'а на скилле `program-design`, реализация — sonnet на скилле `program-implementation`. Источник истины по слайсу — `docs/design/passkey-demo/slices/NN-<slice>.md` + `contracts-graph.md` + `messages.md` + `infrastructure.md`.
+
+Инфраструктурный модуль (Go-модуль, env-конфигурация, goose-миграции, HTTP-роутер, structured logging с trace_id, `/health`) собран в S1 по `infrastructure.md` — placeholder из `devlog/06` заменён на реальный сервер.
+
+| Slice | Эндпоинт | Failure-режим | Статус |
+|---|---|---|---|
+| S1 — registrations-start | `POST /v1/registrations` | — | done (PR #17) |
+| S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | todo (дизайн) |
+| S3 — sessions-start | `POST /v1/sessions` | — | todo (дизайн) |
+| S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | todo (дизайн) |
+| S5 — sessions-logout | `DELETE /v1/sessions/current` | — | todo (дизайн) |
+| S6 — users-me | `GET /v1/users/me` | — | todo (дизайн) |
+
+S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 опираются на auth-middleware, который появится в S2 вместе с JWT.
+
+**Цикл одного slice'а:**
+1. Opus на ветке `feat/design-<slice>` расширяет `messages.md`, `contracts-graph.md`, добавляет `slices/NN-<slice>.md`, тикет в `docs/design/passkey-demo/backlog.md`. PR в main.
+2. Sonnet на ветке `feat/slice-<slice>` реализует по тикету. PR в main.
+3. Devlog `docs/design/passkey-demo/devlog.md` дополняется блоком после каждого slice'а.
+
+**Definition of Done Шага 3:** все 6 slice'ов закрыты, все компонентные сценарии зелёные, `devlog/03-go-server.md` зафиксирован, CI на main зелёный.
 
 ### Шаг 4 — CI на PR
 

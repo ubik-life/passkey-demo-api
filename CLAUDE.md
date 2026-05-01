@@ -52,14 +52,13 @@ devlog/
 | OpenAPI-спека | done |
 | README.md | done |
 | Шаблон компонентных тестов (Шаг 2.0) | done |
-| Gherkin-сценарии (Шаг 2) | todo (sonnet) |
-| Go-сервер | todo |
+| Gherkin-сценарии (Шаг 2) | done |
+| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1 done, S2 next |
+| CI на PR (Шаг 4) | todo |
 
 ## Следующий шаг
 
-Шаг 2 — sonnet пишет 4 `.feature`-файла (8 сценариев) по плану T2.1–T2.7 в `backlog.md`. Шаблон уже готов, smoke зелёный: `cd component-tests && ./scripts/run-tests.sh`.
-
-После Шага 2 — Шаг 3 (TDD-цикл по модулям, постепенное вытеснение placeholder в `cmd/api/main.go` реальной логикой).
+Дизайн slice'а S2 (`registrations-finish` — `POST /v1/registrations/{id}/attestation`, фаза 2 регистрации, JWT Ed25519, сущности User+Credential, режим `db_disk_full`). Opus на скилле `program-design`, ветка `feat/design-registrations-finish`. После мержа дизайна — sonnet реализует по тикету.
 
 ## Принятые решения
 
