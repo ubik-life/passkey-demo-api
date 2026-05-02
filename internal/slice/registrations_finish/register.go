@@ -2,7 +2,6 @@ package registrations_finish
 
 import (
 	"crypto/ed25519"
-	"io"
 	"log/slog"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +18,6 @@ type Deps struct {
 	RP     s1.RPConfig
 	JWT    JWTConfig
 	Signer ed25519.PrivateKey
-	Rand   io.Reader
 }
 
 // Register подключает слайс к роутеру.

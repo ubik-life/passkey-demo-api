@@ -2,6 +2,7 @@ package registrations_finish
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -115,7 +116,7 @@ func verifyAttestation(input AttestationVerification, rp s1.RPConfig) (VerifiedC
 	}, nil
 }
 
-func generateTokenPair(input GenerateTokenPairInput, signer ed25519.PrivateKey, jwtCfg JWTConfig, rdr io.Reader) (IssuedTokenPair, error) {
+func generateTokenPair(input GenerateTokenPairInput, signer ed25519.PrivateKey, jwtCfg JWTConfig) (IssuedTokenPair, error) {
 	claims := jwt.RegisteredClaims{
 		Issuer:    jwtCfg.Issuer,
 		Subject:   input.User.ID().String(),
@@ -133,7 +134,7 @@ func generateTokenPair(input GenerateTokenPairInput, signer ed25519.PrivateKey, 
 	}
 
 	refreshRaw := make([]byte, 32)
-	if _, err := io.ReadFull(rdr, refreshRaw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, refreshRaw); err != nil {
 		return IssuedTokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
 	plaintext := base64.RawURLEncoding.EncodeToString(refreshRaw)

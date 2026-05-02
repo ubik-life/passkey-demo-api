@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"os"
@@ -39,7 +38,7 @@ func main() {
 	}
 	defer db.Close()
 
-	deps := app.Build(cfg, db, log, clock.System{}, signer, rand.Reader)
+	deps := app.Build(cfg, db, log, clock.System{}, signer)
 
 	mux := chi.NewRouter()
 	mux.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

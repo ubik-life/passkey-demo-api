@@ -36,7 +36,7 @@ func ProcessRegistrationFinish(req RegistrationFinishRequest, deps Deps) (TokenP
 	credential := NewCredential(credInput)
 
 	tokenInput := GenerateTokenPairInput{User: user, Now: deps.Clock.Now()}
-	issued, err := generateTokenPair(tokenInput, deps.Signer, deps.JWT, deps.Rand)
+	issued, err := generateTokenPair(tokenInput, deps.Signer, deps.JWT)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("token pair: %w", err)
 	}

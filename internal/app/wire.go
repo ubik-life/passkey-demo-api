@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/ubik-life/passkey-demo-api/internal/clock"
@@ -35,7 +34,7 @@ type WiredDeps struct {
 }
 
 // Build собирает зависимости для всех слайсов.
-func Build(cfg AppConfig, db *sql.DB, log *slog.Logger, clk clock.Clock, signer Signer, rnd io.Reader) WiredDeps {
+func Build(cfg AppConfig, db *sql.DB, log *slog.Logger, clk clock.Clock, signer Signer) WiredDeps {
 	return WiredDeps{
 		RegistrationsStart: s1.NewDeps(db, clk, log, cfg.RP, cfg.ChallengeTTL),
 		RegistrationsFinish: rf.Deps{
@@ -45,7 +44,6 @@ func Build(cfg AppConfig, db *sql.DB, log *slog.Logger, clk clock.Clock, signer 
 			RP:     cfg.RP,
 			JWT:    cfg.JWT,
 			Signer: signer.Private,
-			Rand:   rnd,
 		},
 	}
 }
