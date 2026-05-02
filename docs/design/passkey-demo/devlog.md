@@ -136,3 +136,29 @@
 **Стоимость сессии (инкрементально):** ~$1.15. Накопленно за сессию (S3 + рефакторинг): $4.79, API: 14m 23s, wall: 43m 10s. Изменений: +705 / −16 строк суммарно.
 Токены claude-sonnet-4-6: 147 input, 44.3k output, 11.9m cache read, 152.3k cache write ($4.79 накопленно).
 Токены claude-haiku-4-5: 365 input, 17 output, 0 cache read, 0 cache write ($0.0004).
+
+## Дизайн S4 sessions-finish (2026-05-02)
+
+**Что сделано:** Спроектирован slice S4 (`POST /v1/sessions/{id}/assertion`) — карточка `slices/04-sessions-finish.md` (8 узлов графа, псевдокод пайпа из 10 строк, контракты, маппинг ошибок, Gherkin-mapping на 6 Then-шагов, 11 юнит-тестов по формуле, DoD), дополнения `messages.md` (структуры слайса 4 + аддитивные расширения S2 `GenerateTokenPair`/`BuildResponse` и S3 `LoginSessionIDFromString`/`LoginSessionFromRow`), `contracts-graph.md` (Slice 04: граф, таблица 13 стрелок, чек-лист 9.3 с пометками `[x]`), `infrastructure.md` (Deps слайса 4 без сырого `*sql.DB`, явная отметка «новых миграций нет»), `slices.md` (статус S4 → спроектирован), тикет S4 и хендофф-чеклист в `design/backlog.md`. Ветка `feat/design-sessions-finish`, ожидает ревью оператора и аппрува хендоффа.
+
+**Решения, принятые по ходу:**
+
+- **Подтип, не guard — повторно для login-сессии.** `FreshLoginSession` несёт инвариант «не истекла» в типе (то же решение, что для `FreshRegistrationSession` в S2). Узлы `verifyAssertion`/`Store.LoadAssertionTarget` принимают `FreshLoginSession`, не сырой `LoginSession` — система типов запрещает «случайно» передать просроченную сессию.
+
+- **Второй инвариант через I/O-агрегат, не guard выше по пайпу.** Проверка «credential принадлежит user'у из login-сессии» инкапсулирована в I/O-возврате `AssertionTarget`: метод `Store.LoadAssertionTarget` либо возвращает агрегат с гарантией `credential.UserID() == user.ID()`, либо `ErrCredentialNotFound`. Это то же решение, что в S3 для `UserWithCredentials` (инвариант непустого списка credentials). Альтернатива — guard `checkCredentialOwnership(target) -> error` после load — нарушает подправило «подтип, не guard»: код выше по пайпу мог бы случайно принять «чужой» credential без проверки.
+
+- **`db_locked` фактически ловится первым I/O-узлом.** Compose-сценарий «БД заблокирована при завершении входа» открывает `BEGIN EXCLUSIVE TRANSACTION` в раннере **до** прихода запроса. SQLite EXCLUSIVE-lock блокирует и read'ы, и write'ы — поэтому `Store.LoadLoginSession` (шаг 2) упирается в `SQLITE_BUSY` первым; (4) и (7) в этом сценарии не достигаются. Тем не менее **все три I/O-узла** обязаны симметрично маппить `SQLITE_BUSY → ErrDBLocked` — это часть OpenAPI-контракта. В Gherkin-mapping Then «503» формально привязан к `ErrDBLocked` любого из (2)/(4)/(7), фактический ловец задокументирован отдельно.
+
+- **Аддитивные экспорты S2 вместо дублирования.** `GenerateTokenPair` и `BuildResponse` — обёртки над пакетными функциями S2, не копии. Альтернатива (дублировать ~10 строк выпуска токенов и сериализации в S4) — проще по coupling, но даёт два места правки при изменении формата `TokenPair`. Выбран импорт через экспорт. Тот же приём, что для `GenerateChallenge` в S1 → S3.
+
+- **Новых миграций S4 не вводит — явный пункт в DoD.** Слайс работает с существующими таблицами: `login_sessions` (S3), `credentials.sign_count` (S2), `refresh_tokens` (S2). Атомарная транзакция `FinishLogin` — UPDATE + INSERT + DELETE — без ALTER TABLE. Чтобы sonnet случайно не создал лишний файл `0006_*.sql`, в DoD стоит явный пункт «**новых миграций нет**».
+
+- **Атомарность `FinishLogin` — replay-защита.** UPDATE `sign_count` атомарно с DELETE login-сессии: иначе «частичная запись» оставляет `sign_count` инкрементированным без удаления сессии (при ретрае получаем 404 + бóльший counter, что ломает следующий нормальный вход). Объяснение мотива зафиксировано в контракте Store.FinishLogin.
+
+- **Зависимость S4 от S3+техдолга S1/S2.** Тикет S4 в DoD требует, чтобы (а) S3 был реализован и смержен, (б) `refactor/s1-s2-store` (root backlog) был закрыт **до** начала реализации S4. Иначе `wire.go` будет содержать смешанный стиль `Deps` (S3/S4 — через `*Store`, S1/S2 — через сырой `*sql.DB`). Альтернатива — закрыть техдолг одним PR с S4 — нарушает «связанные правки — одна ветка», поэтому отвергнута.
+
+- **Шаги завершения — явные, без агрегата «локальный CI».** По просьбе оператора пункт «локальный CI зелёный» развёрнут в три явных пункта DoD: (1) `go test ./...`, (2) `./component-tests/scripts/run-tests.sh healthy`, (3) `./component-tests/scripts/run-tests.sh disk-full` (regression S2). Каждый пункт — отдельная галочка с критерием прохождения.
+
+**Стоимость сессии:** $8.12. Время API: 18m 15s, wall: 20m 5s. Изменений: +931 / −28 строк.
+Токены claude-opus-4-7: 67 input, 77.5k output, 7.9m cache read, 355.4k cache write ($8.12).
+Токены claude-haiku-4-5: 358 input, 17 output, 0 cache read, 0 cache write ($0.0004).

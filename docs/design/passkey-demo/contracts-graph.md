@@ -2,7 +2,7 @@
 
 Граф вызовов модулей слайсов и сверка согласованности контрактов (Шаг 9 `program-design.skill`).
 
-На текущей итерации спроектированы графы слайсов 1 (`registrations-start`), 2 (`registrations-finish`) и 3 (`sessions-start`). Слайсы 4-6 будут добавлены в следующих итерациях.
+На текущей итерации спроектированы графы слайсов 1 (`registrations-start`), 2 (`registrations-finish`), 3 (`sessions-start`) и 4 (`sessions-finish`). Слайсы 5-6 будут добавлены в следующих итерациях.
 
 ---
 
@@ -393,6 +393,151 @@
 
 ---
 
+## Slice 04 — `sessions-finish`
+
+### Граф вызовов
+
+```
+[ HTTP POST /v1/sessions/{id}/assertion ]
+        |
+        | path-param {id} + body []byte
+        v
++-------------------------------------------------------+
+| ингресс-адаптер: HTTPHandler                          |
+|   parsePathAndBody: (id string, body []byte)          |
+|     -> SessionFinishRequest                           |
++-------------------------------------------------------+
+        |
+        | SessionFinishRequest
+        v
++-------------------------------------------------------+
+| головной модуль: ProcessSessionFinish                 |
++-------------------------------------------------------+
+   |
+   |-- (1) NewSessionFinishCommand:
+   |        in:  SessionFinishRequest
+   |        out: (SessionFinishCommand, error)
+   |        delegates: LoginSessionIDFromString(string) -> (LoginSessionID, error)   [S3 рехидратор]
+   |                   parseAssertion([]byte)             -> (ParsedAssertion, error)
+   |
+   |-- (2) Store.LoadLoginSession:                          [метод I/O-объекта; *sql.DB инкапсулирован в Store]
+   |        in:  LoginSessionID
+   |        out: (LoginSession, error)
+   |        delegates: LoginSessionFromRow                   [S3 рехидратор]
+   |        Failure: ErrLoginSessionNotFound, ErrDBLocked
+   |
+   |-- (3) NewFreshLoginSession:                           [конструктор подтипа — подправило «не guard»]
+   |        in:  NewFreshLoginSessionInput { Session, Now }
+   |        out: (FreshLoginSession, error)
+   |        Failure: ErrLoginSessionExpired
+   |
+   |-- (4) Store.LoadAssertionTarget:                       [метод I/O-объекта; *sql.DB инкапсулирован в Store]
+   |        in:  LoadAssertionTargetInput { UserID, CredentialID }
+   |        out: (AssertionTarget, error)
+   |        delegates: CredentialFromRow, UserFromRow         [S2 рехидраторы]
+   |        Failure: ErrCredentialNotFound, ErrDBLocked
+   |
+   |-- (5) verifyAssertion:
+   |        in:  AssertionVerification { Fresh, Parsed, Target }
+   |        out: (VerifiedAssertion, error)
+   |        deps: RPConfig (ID + Origin)
+   |        Failure: ErrAssertionInvalid
+   |
+   |-- (6) GenerateTokenPair [импорт S2]:
+   |        in:  GenerateTokenPairInput { User, Now }
+   |        out: (IssuedTokenPair, error)
+   |        deps: ed25519.PrivateKey, JWTConfig
+   |        Failure: catastrophic (rand / sign)
+   |
+   |-- (7) Store.FinishLogin:                                 [метод I/O-объекта; *sql.DB инкапсулирован в Store]
+   |        in:  FinishLoginInput { Credential, NewSignCount, RefreshTokenHash,
+   |                                 RefreshExpiresAt, LoginSessionID }
+   |        out: error
+   |        Failure: ErrDBLocked, ErrDiskFull
+   |
+   |-- (8) BuildResponse [импорт S2]:
+   |        in:  BuildTokenPairView { Access, Refresh }
+   |        out: TokenPair                                  [без error]
+   |
+   v
+[ ингресс-адаптер: formatResponse ]
+   |
+   |  Success:  TokenPair → 200 + JSON
+   |  Failure:  ErrInvalidLoginSessionID / ErrAssertionParse → 422 VALIDATION_ERROR
+   |            ErrLoginSessionNotFound / ErrLoginSessionExpired
+   |              / ErrCredentialNotFound                    → 404 NOT_FOUND
+   |            ErrAssertionInvalid                          → 422 ASSERTION_INVALID
+   |            ErrDBLocked                                  → 503 + Retry-After: 1 + db_locked
+   |            ErrDiskFull                                  → 507 + db_disk_full
+   |            прочее                                        → 500 INTERNAL_ERROR
+   v
+[ HTTP response ]
+```
+
+### Таблица стрелок
+
+| #  | Кто вызывает              | Кого вызывает                   | Передаёт (data)                          | Получает обратно                       | Классы ошибок                                       |
+|----|---------------------------|---------------------------------|------------------------------------------|----------------------------------------|----------------------------------------------------|
+| A  | HTTP runtime              | ингресс-адаптер.parsePathAndBody| `(string, []byte)` (path + body)         | `SessionFinishRequest`                  | I/O чтения тела → 400 (адаптер)                    |
+| B  | ингресс-адаптер           | `ProcessSessionFinish`          | `SessionFinishRequest`                   | `(TokenPair, error)`                    | вся цепочка ниже                                    |
+| 1  | `ProcessSessionFinish`    | `NewSessionFinishCommand`       | `SessionFinishRequest`                   | `(SessionFinishCommand, error)`         | `ErrInvalidLoginSessionID`, `ErrAssertionParse`     |
+| 1a | `NewSessionFinishCommand` | `LoginSessionIDFromString` [S3] | `string`                                 | `(LoginSessionID, error)`               | `ErrInvalidLoginSessionID`                          |
+| 1b | `NewSessionFinishCommand` | `parseAssertion`                | `[]byte`                                 | `(ParsedAssertion, error)`              | `ErrAssertionParse`                                 |
+| 2  | `ProcessSessionFinish`    | `Store.LoadLoginSession`        | `LoginSessionID`                          | `(LoginSession, error)`                 | `ErrLoginSessionNotFound`, `ErrDBLocked`, низкоуровневые |
+| 3  | `ProcessSessionFinish`    | `NewFreshLoginSession`           | `NewFreshLoginSessionInput`               | `(FreshLoginSession, error)`            | `ErrLoginSessionExpired`                             |
+| 4  | `ProcessSessionFinish`    | `Store.LoadAssertionTarget`      | `LoadAssertionTargetInput`                | `(AssertionTarget, error)`              | `ErrCredentialNotFound`, `ErrDBLocked`, низкоуровневые |
+| 5  | `ProcessSessionFinish`    | `verifyAssertion`                | `AssertionVerification`                   | `(VerifiedAssertion, error)`            | `ErrAssertionInvalid`                                |
+| 6  | `ProcessSessionFinish`    | `GenerateTokenPair` [S2]        | `GenerateTokenPairInput`                  | `(IssuedTokenPair, error)`              | catastrophic (→ 500)                                |
+| 7  | `ProcessSessionFinish`    | `Store.FinishLogin`              | `FinishLoginInput`                        | `error`                                 | `ErrDBLocked`, `ErrDiskFull`, низкоуровневые        |
+| 8  | `ProcessSessionFinish`    | `BuildResponse` [S2]            | `BuildTokenPairView`                      | `TokenPair`                             | —                                                   |
+| C  | ингресс-адаптер           | HTTP runtime (formatResponse)   | `TokenPair` или `error`                   | HTTP-ответ                               | маппинг `error` → 4xx/5xx                           |
+
+### Чек-лист сверки 9.3
+
+| # | (1) Тип на стрелке существует | (2) Имя сигнатуры совпадает | (3) Консеквент A ⊆ антецеденту B | (4) Тип ошибки согласован | (5) Покрытие Gherkin | (6) Один data-аргумент |
+|---|-----|-----|-----|-----|-----|-----|
+| A  | [x] `string`, `[]byte`, `SessionFinishRequest` | [x] handler.parsePathAndBody | [x] адаптер требует только синтаксически валидный путь и тело | [x] провал чтения тела → 400 (локально) | [x] неявно (Then 200/503 включают парсинг) | [x] один аргумент: `SessionFinishRequest` (path+body — поля одной DTO) |
+| B  | [x] `SessionFinishRequest`, `TokenPair`, `error` | [x] `ProcessSessionFinish` | [x] head принимает любой Request; внутренняя валидация в (1) | [x] все ошибки ниже маппятся адаптером | [x] Then «ответ 200» Success-ветка B; Then «ответ 503» Failure-ветка B | [x] один data-аргумент `req`; `Deps` отдельно |
+| 1  | [x] `SessionFinishRequest`, `SessionFinishCommand` | [x] `NewSessionFinishCommand` | [x] head передаёт уже распарсенный req | [x] `ErrInvalidLoginSessionID`/`ErrAssertionParse` маппятся в 422 | [x] неявно (Then 200) | [x] один аргумент `req` |
+| 1a | [x] `string`, `LoginSessionID` | [x] `LoginSessionIDFromString` (S3 рехидратор) | [x] строка из path-параметра | [x] `ErrInvalidLoginSessionID` пробрасывается через `%w` | [x] неявно | [x] один аргумент |
+| 1b | [x] `[]byte`, `ParsedAssertion` | [x] `parseAssertion` | [x] байты тела запроса | [x] `ErrAssertionParse` пробрасывается через `%w` | [x] неявно | [x] один аргумент |
+| 2  | [x] `LoginSessionID`, `LoginSession`, `error` | [x] `Store.LoadLoginSession` | [x] `id` валиден из (1); миграция 0005 применена | [x] `ErrLoginSessionNotFound` → 404; `ErrDBLocked` → 503; прочее → 500 | [x] Success — Then 200; Failure-ветка `ErrDBLocked` — один из путей Then «503 + Retry-After + db_locked» (см. ниже про `db_locked` в S4) | [x] один data-аргумент `id` (`*sql.DB` инкапсулирован в `Store`, не виден стрелкой) |
+| 3  | [x] `NewFreshLoginSessionInput`, `FreshLoginSession`, `error` | [x] `NewFreshLoginSession` | [x] Session — валидная сущность из (2); Now — момент | [x] `ErrLoginSessionExpired` → 404 | [x] неявно (Then 200) | [x] один аргумент `input` |
+| 4  | [x] `LoadAssertionTargetInput`, `AssertionTarget`, `error` | [x] `Store.LoadAssertionTarget` | [x] UserID валиден из (3); CredentialID — байты из распарсенного assertion (1b); миграции 0002/0003 применены | [x] `ErrCredentialNotFound` → 404; `ErrDBLocked` → 503; прочее → 500 | [x] Success — Then 200; Failure-ветка `ErrDBLocked` — один из путей Then «503» | [x] один data-аргумент `input` (`*sql.DB` инкапсулирован в `Store`, не виден стрелкой) |
+| 5  | [x] `AssertionVerification`, `VerifiedAssertion`, `error` | [x] `verifyAssertion` | [x] Fresh — non-expired; Parsed — синтаксически распарсенный; Target — credential «свой» (инвариант в типе) | [x] `ErrAssertionInvalid` → 422 ASSERTION_INVALID | [x] неявно (Then 200) | [x] один data-аргумент `input` (RPConfig — dep) |
+| 6  | [x] `GenerateTokenPairInput`, `IssuedTokenPair`, `error` | [x] `GenerateTokenPair` (S2 экспорт) | [x] User валиден (из target); Now — момент; signer непустой; TTL > 0 | [x] catastrophic → 500 | [x] Then «непустое access_token»/«непустое refresh_token» — поля выхода | [x] один data-аргумент `input` (signer/jwtCfg — deps) |
+| 7  | [x] `FinishLoginInput`, `error` | [x] `Store.FinishLogin` | [x] Credential, NewSignCount, RefreshHash, RefreshExpiresAt, LoginSessionID — валидны | [x] `ErrDBLocked` → 503; `ErrDiskFull` → 507; прочее → 500 | [x] Success — Then 200; Failure-ветка `ErrDBLocked` — один из путей Then «503» | [x] один data-аргумент `input` (`*sql.DB` инкапсулирован в `Store`, не виден стрелкой) |
+| 8  | [x] `BuildTokenPairView`, `TokenPair` | [x] `BuildResponse` (S2 экспорт) | [x] view собран из выходов (6) | [x] нет ошибок | [x] Then 200 (формат `access_token`/`refresh_token`) | [x] один аргумент `view` |
+| C  | [x] `TokenPair`, `error` | [x] handler.formatResponse | [x] head вернул либо Success, либо одну из известных ошибок | [x] полный маппинг в таблице ошибок карточки слайса | [x] Then 200 / 503 + Retry-After + `code=db_locked` | [x] один data-аргумент: либо `Response`, либо `error` |
+
+**Все стрелки помечены `[x] согласовано`.**
+
+### Покрытие Gherkin-сценариев графом (пункт 9.3.5)
+
+В Gherkin для эндпоинта S4 — 6 Then-шагов (3 в «Завершение входа», 3 в «БД заблокирована при завершении входа»). Все покрыты, см. таблицу `## Gherkin-mapping` в `slices/04-sessions-finish.md`.
+
+Цепочки:
+- Happy: B → 1 → 2 (Success) → 3 (Success) → 4 (Success) → 5 (Success) → 6 (Success) → 7 (Success) → 8 → C (200)
+- `db_locked`: B → 1 → (одна из (2)/(4)/(7) Failure: ErrDBLocked) → C (503 + Retry-After + db_locked)
+
+**Замечание про `db_locked` в S4.** Compose-сценарий «БД заблокирована при завершении входа» открывает `BEGIN EXCLUSIVE TRANSACTION` в раннере **до** прихода запроса в SUT. SQLite EXCLUSIVE-lock блокирует и read'ы, и write'ы — поэтому первый же I/O-узел S4 (`Store.LoadLoginSession`, шаг 2) упрётся в `SQLITE_BUSY` и вернёт `ErrDBLocked`. Шаги (4) и (7) в этом сценарии не достигаются. Тем не менее **все три I/O-узла** обязаны корректно маппить `SQLITE_BUSY → ErrDBLocked` — это часть декларированного OpenAPI-контракта (`db_locked` декларирован на этом эндпоинте). В таблице сверки выше Then «503» формально привязан к ветке `ErrDBLocked` любого из узлов (2)/(4)/(7); в карточке слайса Gherkin-mapping явно указывает обе альтернативы.
+
+Узлов графа, не упомянутых ни одним Then-шагом, **нет**. Failure-ветки (1)/(1a)/(1b)/(2 ErrLoginSessionNotFound)/(3 ErrLoginSessionExpired)/(4 ErrCredentialNotFound)/(5)/(6)/(7 ErrDiskFull) — пути, которые на этом эндпоинте Gherkin не проверяет (по сознательной раскладке: `db_disk_full` → S2; валидационные/доменные ошибки — задача юнит-тестов конструкторов и контракта OpenAPI). Это **не** мёртвая логика — часть декларированного OpenAPI-контракта.
+
+### Сверка по правилу «один аргумент» (пункт 9.3.6) и автономии I/O-объекта (Шаг 6)
+
+Все стрелки графа несут **ровно одну** data-сущность. Зависимости (`RPConfig`, `ed25519.PrivateKey`, `JWTConfig`) на стрелках не отображены — они в `Dependencies:` контракта модуля.
+
+**Сырого `*sql.DB` ни на одной стрелке нет.** Узлы (2), (4), (7) — методы I/O-объекта `Store`, инкапсулирующего `*sql.DB` (Шаг 6 + `feedback_io_autonomous_store`). В `Deps` головного модуля — поле `*Store`, не сырой `*sql.DB`.
+
+### Применение подправила «подтип, не guard» (Шаг 3 скилла)
+
+Узел (3) `NewFreshLoginSession` — конструктор подтипа `FreshLoginSession`, инвариант «не истекла» закреплён в типе. Узлы (4) и (5) принимают `FreshLoginSession`/`AssertionTarget` (с инвариантом «credential свой»), не сырые `LoginSession`/`Credential` — что гарантировано системой типов.
+
+Нет узлов со «висящей» сигнатурой `(Domain) -> ()` или `(input) -> error` — все логические шаги либо возвращают новую доменную структуру (1, 3, 5, 6, 8), либо являются I/O-эффектом с `error` (2, 4, 7). Правило соблюдено.
+
+---
+
 ## I/O без юнитов (сверка с Шагом 8.1)
 
 В таблице юнит-тестов карточки слайса 1 нет:
@@ -409,13 +554,20 @@
 - `Store.PersistLoginSession` (метод I/O-объекта — труба, write);
 - ингресс-адаптера (парсинг и маппинг — компонентным).
 
+В таблице юнит-тестов карточки слайса 4 нет:
+- `Store.LoadLoginSession` (метод I/O-объекта — труба, read);
+- `Store.LoadAssertionTarget` (метод I/O-объекта — труба, read с двумя SELECT'ами и инвариант-проверкой);
+- `Store.FinishLogin` (метод I/O-объекта — труба, write-tx);
+- ингресс-адаптера (парсинг path/body и маппинг — компонентным);
+- `GenerateTokenPair`, `BuildResponse` (импорт S2; юнит-тесты уже посчитаны в карточке S2).
+
 Это соответствует жёсткому правилу Шага 8.1: I/O проверяется только компонентными сценариями, формула юнит-тестов считается только для модулей логики и конструкторов.
 
 ---
 
 ## Каталог сообщений: транзитивная замкнутость (9.1)
 
-Прошёл `messages.md` для слайсов 1 и 2:
+Прошёл `messages.md` для слайсов 1-4:
 
 **Слайс 1:**
 - `RegistrationStartRequest` — все поля примитивы.
@@ -453,4 +605,17 @@
 - **Аддитивные расширения S1:** `GenerateChallenge` экспортируется (обёртка над `generateChallenge`).
 - **Аддитивные расширения S2:** рехидраторы `UserFromRow`, `CredentialFromRow`, `UserIDFromString` экспортируются.
 
-Ни одного «потом доопределим». Каталог замкнут для слайсов 1-3.
+**Слайс 4:**
+- `SessionFinishRequest` — поля `string` + `[]byte`.
+- `ParsedAssertion` — обёртка над `*protocol.ParsedCredentialAssertionData` (внешний тип go-webauthn). Конструктор `parseAssertion([]byte) -> (ParsedAssertion, error)` описан.
+- `SessionFinishCommand` — собирается `NewSessionFinishCommand`, делегирует `LoginSessionIDFromString` (S3) и `parseAssertion`.
+- `FreshLoginSession` — конструктор подтипа `NewFreshLoginSession(input) -> (FreshLoginSession, error)`; поля неэкспортируемые. Инвариант «не истекла».
+- `AssertionTarget` — агрегат, создаётся только методом `Store.LoadAssertionTarget`; поля неэкспортируемые. Инвариант «credential.UserID() == user.ID()».
+- `VerifiedAssertion` — собирается только `verifyAssertion`; поле `newSignCount uint32` неэкспортируемое.
+- `NewFreshLoginSessionInput`, `LoadAssertionTargetInput`, `AssertionVerification`, `FinishLoginInput` — value-агрегаторы.
+- `TokenPair`, `BuildTokenPairView`, `IssuedTokenPair`, `AccessToken`, `IssuedRefreshToken`, `GenerateTokenPairInput`, `JWTConfig` — импортируются из S2; используются как есть, без новых конструкторов.
+- Sentinel-ошибки: `ErrInvalidLoginSessionID`, `ErrAssertionParse`, `ErrLoginSessionNotFound`, `ErrLoginSessionExpired`, `ErrCredentialNotFound`, `ErrAssertionInvalid` — определены. `ErrDBLocked`, `ErrDiskFull` — переиспользуются из S1.
+- **Аддитивные расширения S2:** `GenerateTokenPair`, `BuildResponse` экспортируются (обёртки над пакетными `generateTokenPair`/`buildResponse`).
+- **Аддитивные расширения S3:** рехидраторы `LoginSessionIDFromString`, `LoginSessionFromRow` экспортируются.
+
+Ни одного «потом доопределим». Каталог замкнут для слайсов 1-4.

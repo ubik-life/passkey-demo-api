@@ -106,9 +106,10 @@ main():
     registrationsStart.Register(mux, deps.RegistrationsStart)
     registrationsFinish.Register(mux, deps.RegistrationsFinish)   // [S2]
     sessionsStart.Register(mux, deps.SessionsStart)               // [S3]
+    sessionsFinish.Register(mux, deps.SessionsFinish)             // [S4]
     // в следующих итерациях:
-    // sessionsFinish.Register(mux, deps.SessionsFinish)
-    // ...
+    // sessionsLogout.Register(mux, deps.SessionsLogout)
+    // usersMe.Register(mux, deps.UsersMe)
 
     srv := &http.Server{ Addr: cfg.ListenAddr, Handler: mux }
     log.Info("listening", "addr", cfg.ListenAddr)
@@ -215,6 +216,51 @@ deps.SessionsStart = sessions_start.Deps{
 
 > **Открытый вопрос для S4 (фиксирую сейчас, чтобы не потерять).** Когда S4 будет проектироваться, понадобится решить: (а) хватит ли одного `PASSKEY_CHALLENGE_TTL` на оба сценария (регистрация + вход), или (б) нужен отдельный `PASSKEY_LOGIN_CHALLENGE_TTL`. Пока — (а), `5m` подходит обоим. Если разные SLA понадобятся, добавим в инфраструктурный модуль env с дефолтом, равным `PASSKEY_CHALLENGE_TTL`, и расширим `AppConfig`. Изменение аддитивное.
 
+## Подключение слайса 4 (S4)
+
+```go
+// internal/slice/sessions_finish/register.go
+package sessions_finish
+
+func Register(mux chi.Router, deps Deps) {
+    h := newHTTPHandler(deps)
+    mux.Post("/v1/sessions/{id}/assertion", h.ServeHTTP)
+}
+
+// Deps — зависимости слайса 4.
+// Применение Шага 6 скилла + feedback_io_autonomous_store: БД-зависимость
+// инкапсулирована в *Store, головной модуль её не видит. Сырого *sql.DB здесь нет.
+type Deps struct {
+    Store    *Store                          // автономный I/O-объект слайса 4, инкапсулирующий *sql.DB
+    Clock    clock.Clock
+    Logger   *slog.Logger
+    RP       registrations_start.RPConfig    // импорт из S1; в S4 используются ID и Origin (для verifyAssertion)
+    JWT      registrations_finish.JWTConfig  // импорт из S2; используется для генерации access JWT в GenerateTokenPair
+    Signer   ed25519.PrivateKey              // приватный ключ Ed25519, генерится при старте; передаётся тот же, что в S2
+}
+```
+
+В `wire.go` инфраструктурный модуль создаёт `Store` и пробрасывает в `Deps`:
+
+```go
+// internal/app/wire.go (фрагмент для S4)
+sessionsFinishStore := sessions_finish.NewStore(db)  // db *sql.DB — общий пул из db.Open
+deps.SessionsFinish = sessions_finish.Deps{
+    Store:  sessionsFinishStore,
+    Clock:  clk,
+    Logger: log.With("slice", "sessions-finish"),
+    RP:     cfg.RP,
+    JWT:    cfg.JWT,
+    Signer: signer.Private,
+}
+```
+
+В S4 не нужен `ChallengeTTL`: фаза 2 не создаёт challenge, она верифицирует уже сохранённую (TTL зашит в `LoginSession.ExpiresAt()` шагом S3, проверяется конструктором подтипа `NewFreshLoginSession`).
+
+**Никаких новых миграций S4 не вводит.** Все три таблицы, к которым обращается слайс, уже созданы предыдущими миграциями: `login_sessions` (S3 миграция `0005`), `credentials` (S2 миграция `0003`, поле `sign_count` уже там), `refresh_tokens` (S2 миграция `0004`, та же таблица, что заполнялась в фазе 2 регистрации).
+
+> **Технический долг S1/S2 (повтор).** Реализация S4 потребует, чтобы в `Deps.Store` лежал автономный `*Store`, не сырой `*sql.DB`. К моменту, когда sonnet возьмёт тикет S4, техдолг S1/S2 (отдельный тикет в root `backlog.md`, ветка `refactor/s1-s2-store`) **должен быть закрыт** — иначе S4 окажется единственным слайсом с правильным `Deps.Store`, а S1/S2 продолжат держать сырой `*sql.DB`, и в `wire.go` будет смешанный стиль. Альтернатива — закрыть техдолг одним PR вместе с реализацией S4 (что нарушит правило «связанные правки — одна ветка», поэтому не предпочтительно). См. соответствующий пункт в тикете S4 (`docs/design/passkey-demo/backlog.md`).
+
 ## Миграции
 
 ```
@@ -319,9 +365,13 @@ DROP TABLE IF EXISTS login_sessions;
 
 Хранится `user_id` (FK на `users.id`), не `handle`: `user_id` стабилен, использует индекс PK, и в S4 даёт прямой путь `login_session → user_id → credentials` без повторного поиска по handle. `ON DELETE CASCADE` — на случай удаления пользователя в будущем (на S3-S4 удалений `users` нет, но цена нулевая).
 
+### S4 — без новых миграций
+
+S4 (`sessions-finish`) использует существующие таблицы: `login_sessions` (S3), `credentials` (S2, поле `sign_count` уже есть), `refresh_tokens` (S2). Атомарная транзакция S4 — `UPDATE credentials SET sign_count = ?` + `INSERT INTO refresh_tokens (...)` + `DELETE FROM login_sessions WHERE id = ?` — выполняется без изменения схемы.
+
 ### Будущие миграции
 
-`login_sessions` создаётся в S3. Дополнительные миграции возможны в S5 (logout — может понадобиться индекс `revoked_at` на `refresh_tokens`, но отложим до проектирования S5).
+Дополнительные миграции возможны в S5 (logout — может понадобиться индекс `revoked_at` на `refresh_tokens`, но отложим до проектирования S5).
 
 ## Health-эндпоинт
 

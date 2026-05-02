@@ -751,3 +751,256 @@ func (s *Store) PersistLoginSession(ls LoginSession) error
 
 > **Технический долг S1/S2.** В реализованных слайсах 1 и 2 в `Deps` лежит сырой `*sql.DB`, а I/O — пакетные функции (`persistRegistrationSession`, `loadRegistrationSession`, `finishRegistration`), не методы автономного объекта. Это нарушение Шага 6 и `feedback_io_autonomous_store`, которое не правится в этой ветке (правило «связанные правки — одна ветка»: ветка дизайна S3 не должна расширяться на рефакторинг реализаций S1/S2). Долг фиксируется отдельным тикетом и закрывается одним PR — либо вместе с дизайном S4 (когда S4 потребует свой `Store`), либо отдельной refactor-сессией оператора.
 
+## Структуры слайса 4 — `sessions-finish`
+
+Слайс 4 импортирует:
+- из слайса 1: `Challenge`, `ChallengeFromBytes`, `ErrDBLocked`, `ErrDiskFull`;
+- из слайса 2: `User`, `UserID`, `UserIDFromString`, `Credential`, `JWTConfig`, `AccessToken`, `IssuedRefreshToken`, `IssuedTokenPair`, `GenerateTokenPairInput`, `BuildTokenPairView`, `TokenPair` и (после аддитивных расширений) `GenerateTokenPair`, `BuildResponse`;
+- из слайса 3: `LoginSessionID`, `LoginSession` и (после аддитивных расширений) `LoginSessionIDFromString`, `LoginSessionFromRow`.
+
+### Аддитивные расширения слайса 2 для слайса 4
+
+`generateTokenPair` и `buildResponse` сейчас — пакетные функции, не экспортированы. Чтобы S4 переиспользовал их без дублирования логики выпуска токенов и сериализации `TokenPair`, S2 экспортирует:
+
+```go
+// GenerateTokenPair — публичная обёртка над generateTokenPair.
+// Идентичная семантика: Ed25519-подписанный access JWT + 32-байтный refresh с hex(sha256) хешем.
+// Реиспользуется S4.
+func GenerateTokenPair(input GenerateTokenPairInput) (IssuedTokenPair, error)
+// deps: signer ed25519.PrivateKey, jwtCfg JWTConfig (приходят через Deps слайса)
+
+// BuildResponse — публичная обёртка над buildResponse.
+// Сериализует пару выданных токенов в DTO TokenPair.
+// Реиспользуется S4.
+func BuildResponse(view BuildTokenPairView) TokenPair
+```
+
+Юнит-тесты S2 на `generateTokenPair` и `buildResponse` остаются прежними (тесты вызывают публичные обёртки). Если внутренняя `generateTokenPair`/`buildResponse` со временем будет переименована, публичные `GenerateTokenPair`/`BuildResponse` остаются стабильной точкой входа для S4.
+
+`AccessToken`, `IssuedRefreshToken`, `IssuedTokenPair`, `GenerateTokenPairInput`, `BuildTokenPairView`, `JWTConfig`, `TokenPair` уже описаны в секции «Структуры слайса 2» — у каждого экспортированы либо публичные методы (`Value()`, `Plaintext()`, `Hash()`, `ExpiresAt()`), либо публичные поля (для value-агрегаторов). Дополнительных рехидраторов для этих типов S4 не требует — он не читает access/refresh из БД, а только генерирует свежую пару.
+
+### Аддитивные расширения слайса 3 для слайса 4
+
+`LoginSession` и `LoginSessionID` сейчас собираются только конструкторами (`NewLoginSession`, `generateLoginSessionID`). Чтобы S4 мог распарсить path-параметр `{id}` и восстановить сессию из строки БД, S3 экспортирует:
+
+```go
+// LoginSessionIDFromString — рехидратор LoginSessionID для path-параметра.
+// Не валидирует доменные инварианты повторно — UUID-парсинг.
+// Возвращает ошибку только если строка не парсится как UUID.
+func LoginSessionIDFromString(s string) (LoginSessionID, error)
+
+// LoginSessionFromRow восстанавливает сущность из строки login_sessions(id, user_id, challenge, expires_at).
+// Не валидирует доменные инварианты повторно — данные валидировались при INSERT.
+// Возвращает ошибку только при синтаксической непригодности строк
+// (UUID не парсится, challenge не 32 байта).
+func LoginSessionFromRow(
+    rowID string,
+    rowUserID string,
+    rowChallenge []byte,
+    rowExpiresAtUnix int64,
+) (LoginSession, error)
+```
+
+`UserID` восстанавливается через существующий рехидратор `UserIDFromString` (S2 экспорт); `Challenge` — через `ChallengeFromBytes` (S1 экспорт).
+
+### Request DTO (ингресс-адаптер слайса 4)
+
+```go
+// SessionFinishRequest — невалидированный вход из HTTP-адаптера.
+// Маппится из path-параметра {id} и тела POST /v1/sessions/{id}/assertion.
+type SessionFinishRequest struct {
+    LoginSessionIDRaw string  // path-параметр (raw UUID-строка)
+    AssertionBody     []byte  // тело запроса (JSON AssertionRequest по OpenAPI)
+}
+```
+
+### Доменные структуры
+
+```go
+// ParsedAssertion — типизированная обёртка над *protocol.ParsedCredentialAssertionData
+// из github.com/go-webauthn/webauthn/protocol. Создаётся только через parseAssertion.
+type ParsedAssertion struct {
+    parsed *protocol.ParsedCredentialAssertionData
+}
+
+func (p ParsedAssertion) CredentialID() []byte  // raw credential ID из распарсенного assertion
+
+// parseAssertion парсит JSON-тело AssertionRequest через go-webauthn protocol.
+// Не верифицирует — только синтаксис и базовая структура (clientDataJSON,
+// authenticatorData парсятся как CBOR/binary, поля заполняются).
+func parseAssertion(raw []byte) (ParsedAssertion, error)
+// Failure: ErrAssertionParse (некорректный JSON, отсутствуют обязательные поля,
+// authenticatorData не парсится).
+
+// SessionFinishCommand — валидированная команда фазы 2 входа.
+// Поля неэкспортируемые. Создаётся только через NewSessionFinishCommand.
+type SessionFinishCommand struct {
+    loginSessionID LoginSessionID
+    parsed         ParsedAssertion
+}
+
+func NewSessionFinishCommand(req SessionFinishRequest) (SessionFinishCommand, error)
+// Делегирует: LoginSessionIDFromString(req.LoginSessionIDRaw), parseAssertion(req.AssertionBody).
+// Failure: ErrInvalidLoginSessionID, ErrAssertionParse.
+
+func (c SessionFinishCommand) LoginSessionID() LoginSessionID
+func (c SessionFinishCommand) Parsed() ParsedAssertion
+
+// FreshLoginSession — LoginSession с инвариантом «не истекла на момент конструкции».
+// Создаётся только через NewFreshLoginSession. Применение подправила «подтип, не guard»
+// (program-design.skill Шаг 3) — то же решение, что в S2 для FreshRegistrationSession.
+type FreshLoginSession struct {
+    session LoginSession
+}
+
+type NewFreshLoginSessionInput struct {
+    Session LoginSession
+    Now     time.Time
+}
+
+// NewFreshLoginSession проверяет инвариант: input.Now < input.Session.ExpiresAt().
+// Если истекла — ErrLoginSessionExpired, структура не создаётся.
+func NewFreshLoginSession(input NewFreshLoginSessionInput) (FreshLoginSession, error)
+
+func (f FreshLoginSession) ID() LoginSessionID
+func (f FreshLoginSession) UserID() UserID
+func (f FreshLoginSession) Challenge() Challenge
+
+// AssertionTarget — агрегат «пользователь + его credential по credentialID».
+// Создаётся только методом Store.LoadAssertionTarget. Поля неэкспортируемые.
+// Инвариант: credential.UserID() == user.ID() — закодирован в самом существовании структуры.
+// Если в БД нет credential по credentialID или credential принадлежит другому user — I/O
+// возвращает ErrCredentialNotFound, и эта структура с «чужим» credential не существует
+// по построению. Это — то же решение, что в S3 для UserWithCredentials: инвариант
+// инкапсулирован в I/O-возврате, не как guard выше по пайпу.
+type AssertionTarget struct {
+    user       User
+    credential Credential
+}
+
+func (t AssertionTarget) User() User
+func (t AssertionTarget) Credential() Credential
+
+// LoadAssertionTargetInput — value-объект-агрегатор для Store.LoadAssertionTarget.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type LoadAssertionTargetInput struct {
+    UserID       UserID  // из FreshLoginSession.UserID() — «свой» user
+    CredentialID []byte  // из ParsedAssertion.CredentialID() — какой ключ предъявлен
+}
+
+// VerifiedAssertion — assertion, прошедший верификацию против challenge свежей сессии
+// и публичного ключа credential'а. Создаётся только через verifyAssertion. Поля неэкспортируемые.
+type VerifiedAssertion struct {
+    newSignCount uint32  // счётчик из authenticatorData (после успеха Verify)
+}
+
+func (v VerifiedAssertion) NewSignCount() uint32
+
+// AssertionVerification — value-объект-агрегатор для verifyAssertion.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type AssertionVerification struct {
+    Fresh  FreshLoginSession  // non-expired сессия (инвариант в типе)
+    Parsed ParsedAssertion    // распарсенный assertion (синтаксис)
+    Target AssertionTarget    // «свой» user + credential для верификации (инвариант в типе)
+}
+
+// verifyAssertion проверяет assertion против challenge свежей сессии и публичного ключа.
+// Использует protocol.ParsedCredentialAssertionData.Verify под капотом.
+func verifyAssertion(input AssertionVerification) (VerifiedAssertion, error)
+// deps: rpConfig (нужны ID и Origin)
+// Failure: ErrAssertionInvalid (challenge mismatch, RP ID hash mismatch,
+// origin mismatch, signature invalid, sign-count clone-warning и любые другие провалы Verify).
+```
+
+### Ошибки
+
+```go
+// Класс ошибок валидации входа фазы 2 (антецедент конструктора команды).
+// Маппятся ингресс-адаптером в 422 VALIDATION_ERROR.
+var (
+    ErrInvalidLoginSessionID = errors.New("loginSessionID: not a valid UUID")
+    ErrAssertionParse        = errors.New("assertion: cannot parse")
+)
+
+// Класс ошибок предусловий и верификации.
+var (
+    ErrLoginSessionNotFound = errors.New("login session: not found")    // → 404 NOT_FOUND
+    ErrLoginSessionExpired  = errors.New("login session: expired")       // → 404 NOT_FOUND
+    ErrCredentialNotFound   = errors.New("credential: not found")        // → 404 NOT_FOUND (нет credential или принадлежит другому user)
+    ErrAssertionInvalid     = errors.New("assertion: verification failed") // → 422 ASSERTION_INVALID
+)
+
+// ErrDBLocked / ErrDiskFull импортируются из слайса 1 (общий контракт SQLite).
+```
+
+`ErrLoginSessionExpired` маппится в **404 NOT_FOUND** (а не в отдельный код): для клиента истёкшая сессия неотличима от несуществующей — оба требуют начать фазу 1 заново. Различение нужно только в логах.
+
+`ErrCredentialNotFound` объединяет два случая: credential не существует в БД и credential существует, но принадлежит другому пользователю (попытка использовать чужой ключ в рамках своей login_session). Для клиента поведение идентично — 404; различение в логах метода `Store.LoadAssertionTarget` (`logger.Warn("credential mismatch", "user_id", uid, "cred_user_id", cuid)`).
+
+`db_disk_full` (`ErrDiskFull`) на этом эндпоинте **возможен** (write-tx — UPDATE credentials + INSERT refresh_tokens + DELETE login_sessions), декларирован OpenAPI и должен маппиться адаптером в 507. Но компонентного сценария на `db_disk_full` именно здесь **нет** (по сознательной раскладке `slices.md`: `db_disk_full` → S2). Это — часть декларированного OpenAPI-контракта, не мёртвая логика.
+
+### I/O-объект слайса 4 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 4 — поле `Store *Store`, не сырой `*sql.DB`.
+
+```go
+// Store — автономный I/O-объект слайса 4, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — головной модуль обращается к БД исключительно через методы.
+type Store struct {
+    db *sql.DB
+}
+
+// NewStore — единственный конструктор. Принимает открытый пул из инфраструктурного
+// модуля (cmd/api/main.go → wire.go), возвращает готовый объект.
+func NewStore(db *sql.DB) *Store
+
+// LoadLoginSession — read-метод. Контракт: см. slices/04-sessions-finish.md.
+//
+// Внутри: SELECT id, user_id, challenge, expires_at FROM login_sessions WHERE id = ?
+// Если строки нет — ErrLoginSessionNotFound.
+// Маппинг: SQLITE_BUSY → ErrDBLocked. ErrDiskFull для read не различается.
+// Рехидрирует через LoginSessionFromRow (S3 экспорт).
+func (s *Store) LoadLoginSession(id LoginSessionID) (LoginSession, error)
+
+// LoadAssertionTarget — read-метод. Контракт: см. slices/04-sessions-finish.md.
+//
+// Внутри: SELECT credential_id, user_id, public_key, sign_count, transports, created_at
+//          FROM credentials WHERE credential_id = ?
+//          (если нет строки → ErrCredentialNotFound),
+//          сравнить credential.user_id с input.UserID
+//          (если не совпадает → ErrCredentialNotFound — единый класс ошибки),
+//          SELECT id, handle, created_at FROM users WHERE id = ?
+//          (если нет строки → ErrCredentialNotFound — пользователь удалён,
+//           но credential остался; для клиента то же 404).
+//          Сборка AssertionTarget через CredentialFromRow / UserFromRow (S2 рехидраторы).
+//
+// Маппинг: SQLITE_BUSY → ErrDBLocked. ErrDiskFull для read не различается.
+func (s *Store) LoadAssertionTarget(input LoadAssertionTargetInput) (AssertionTarget, error)
+
+// FinishLogin — write-метод (атомарная транзакция, 3 операции).
+// Контракт: см. slices/04-sessions-finish.md.
+//
+// Внутри одной транзакции:
+//   UPDATE credentials SET sign_count = ? WHERE credential_id = ?
+//   INSERT INTO refresh_tokens (token_hash, user_id, expires_at) VALUES (...)
+//   DELETE FROM login_sessions WHERE id = ?
+// При любой ошибке tx откатывается — ни одна из 3 операций не остаётся применённой.
+//
+// Маппинг: SQLITE_BUSY → ErrDBLocked; SQLITE_FULL → ErrDiskFull.
+type FinishLoginInput struct {
+    Credential       Credential       // нужен только credential_id и user_id (для INSERT refresh_tokens.user_id)
+    NewSignCount     uint32           // из VerifiedAssertion.NewSignCount()
+    RefreshTokenHash string           // hex(sha256(plaintext)) из IssuedRefreshToken.Hash()
+    RefreshExpiresAt time.Time        // из IssuedRefreshToken.ExpiresAt()
+    LoginSessionID   LoginSessionID   // из FreshLoginSession.ID() — DELETE FROM login_sessions
+}
+
+func (s *Store) FinishLogin(input FinishLoginInput) error
+```
+
+`Store.FinishLogin` — единственная I/O write-операция слайса. Всё или ничего: иначе при, например, успехе UPDATE credentials + провале INSERT refresh_tokens получим обновлённый sign_count без выданного refresh — клиент уйдёт с 5xx, но сервер «считает», что предыдущий assertion использован, и при ретрае signCount уже больше и Verify провалится с ErrAssertionInvalid.
+
+**Один объект, три метода (два read + один write).** По правилу Шага 6 «один режим работы» каждый метод — отдельный I/O-модуль (юнитами не покрывается, проверяется компонентным сценарием). Объединение в один объект — не нарушение правила: правило про методы, не про типы.
+
+**Решение — `LoadLoginSession` и `LoadAssertionTarget` как два отдельных метода, не один.** Альтернатива — слить в один read-метод `LoadLoginContext({id, credentialID}) -> {Fresh, Target}` — нарушает Шаг 3 «один data-аргумент» (методу пришлось бы принимать кортеж id+credentialID без естественной доменной структуры) и склеивает два логически независимых SELECT'а: «найти сессию» и «найти credential свою» — каждый со своим классом ошибок (`ErrLoginSessionNotFound` vs `ErrCredentialNotFound`). Слияние ухудшит читаемость failure-маппинга в адаптере. Берём два метода.
+
