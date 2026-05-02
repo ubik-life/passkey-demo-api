@@ -2,7 +2,36 @@
 
 Тикеты для sonnet'а. Один тикет = один слайс = одна ветка = один PR (TBD).
 
-S1 спроектирован и реализован (PR #17). S2 спроектирован и реализован (PR #21). S3 спроектирован — ожидает аппрува оператора и реализации sonnet'ом. S4–S6 проектируются отдельными итерациями opus'а.
+S1 спроектирован и реализован (PR #17). S2 спроектирован и реализован (PR #21). S3 спроектирован, ожидает реализации sonnet'ом. S4 спроектирован — ожидает аппрува оператора и реализации sonnet'ом (после S3 и закрытия техдолга S1/S2 → Store). S5–S6 проектируются отдельными итерациями opus'а.
+
+---
+
+## Хендофф-чеклист S4 (заполняет opus, проверяет оператор)
+
+- [x] OpenAPI / AsyncAPI зафиксирован, эндпоинт `POST /v1/sessions/{id}/assertion` описан с 200/404/422/503/507
+- [x] OpenAPI / AsyncAPI содержит 5xx-ответы с `error.code` для режимов отказа `db_locked` и `db_disk_full`
+- [x] README содержит таблицу «Карта режимов отказа» с этими режимами
+- [x] **Компонентные сценарии Gherkin для эндпоинта S4 написаны, закоммичены, стабильны (`Сценарий: Завершение входа` + `Сценарий: БД заблокирована при завершении входа` в `sessions.feature`)**
+- [x] Папка docs/design/passkey-demo/ дополнена под S4
+- [x] intent.md — задача в одну фразу (без изменений)
+- [x] slices.md — статус S4 → спроектирован
+- [x] messages.md — все структуры данных S4 описаны (включая аддитивные расширения S2: `GenerateTokenPair`, `BuildResponse`; S3: `LoginSessionIDFromString`, `LoginSessionFromRow`)
+- [x] Для S4 есть отдельный файл с деревом модулей (`slices/04-sessions-finish.md`)
+- [x] У S4 описан головной модуль `ProcessSessionFinish` (оркестратор пайпа)
+- [x] У головного модуля S4 зафиксирован псевдокод пайпа (8 узлов; 10 строк с импортированными `GenerateTokenPair`/`BuildResponse`; в диапазоне 5–10)
+- [x] У каждого модуля логики S4 описаны антецедент и консеквент
+- [x] У каждого I/O-модуля S4 описан контракт и режимы отказа — методы автономного объекта `Store` (`Store.LoadLoginSession`, `Store.LoadAssertionTarget`, `Store.FinishLogin`); сырого `*sql.DB` в `Deps` головного модуля нет (Шаг 6 + `feedback_io_autonomous_store`)
+- [x] **У каждого модуля S4 Input — одна доменная структура / DTO / void; deps вынесены отдельной строкой `Dependencies:` (Шаг 5). Узлов с 2+ data-аргументами в графе нет**
+- [x] **Карточка S4 содержит таблицу `## Gherkin-mapping`: каждый Then-шаг (3 в happy + 3 в `db_locked`, всего 6) привязан к узлу графа или маппингу адаптера**
+- [x] **contracts-graph.md дополнен Slice 04: граф согласован (все стрелки `[x]`, включая пункт 5 о покрытии Gherkin)**
+- [x] **Применено подправило «подтип, не guard» (Шаг 3 скилла): `NewFreshLoginSession` — конструктор подтипа, инвариант «не истекла» закреплён в типе. Дополнительно: инвариант «credential принадлежит user'у» инкапсулирован в I/O-возврате `AssertionTarget` (то же решение, что в S3 для `UserWithCredentials`)**
+- [x] Для каждого модуля логики S4 посчитаны юнит-тесты по формуле (11 тестов)
+- [x] **В таблице юнит-тестов S4 нет головного модуля, нет методов I/O-объекта (`Store.LoadLoginSession`, `Store.LoadAssertionTarget`, `Store.FinishLogin`) и нет ингресс-адаптера: все три — трубы, проверяются только компонентными сценариями (Шаг 8.1). `GenerateTokenPair`/`BuildResponse` — импорт S2, юниты уже посчитаны там**
+- [x] infrastructure.md дополнен: `Deps` слайса 4 (без сырого `*sql.DB`), подключение `sessions_finish.Register` в `cmd/api/main.go`, явная отметка «новых миграций S4 не вводит» (использует `0003`/`0004`/`0005`)
+- [x] backlog.md — тикет S4 (см. ниже) с DoD из карточки слайса
+- [ ] Оператор аппрувит пакет S4 — @<github-handle>, <YYYY-MM-DD>
+
+> **Замечание о scope.** Хендофф-чеклист подтверждается **для слайса S4**. Для S5–S6 пункты не применимы — карточки будут спроектированы отдельными итерациями. Sonnet берёт из backlog только тот тикет, который в нём прописан.
 
 ---
 
@@ -236,14 +265,68 @@ S3 не вводит новых внешних зависимостей: WebAuth
 
 ---
 
-## Следующие итерации (S4–S6)
+### S4 — slice `sessions-finish`: HTTP POST /v1/sessions/{id}/assertion
 
-S3 спроектирован, ожидает аппрува оператора и реализации sonnet'ом. После мержа S3 — следующая итерация S4. Каждый слайс — отдельная ветка `feat/design-<slice>`, отдельный PR, отдельный хендофф-чеклист, подписанный оператором.
+**Спецификация:**
+- `docs/design/passkey-demo/slices/04-sessions-finish.md` (главный документ)
+- `docs/design/passkey-demo/messages.md` — секция «Структуры слайса 4» + аддитивные расширения S2/S3
+- `docs/design/passkey-demo/contracts-graph.md` — секция «Slice 04»
+- `docs/design/passkey-demo/infrastructure.md` — секция «Подключение слайса 4 (S4)» + раздел «S4 — без новых миграций»
+
+**Зависимости:**
+- S1 (PR #17, реализован) — `Challenge`, `ChallengeFromBytes`, `ErrDBLocked`, `ErrDiskFull`.
+- S2 (PR #21, реализован) — `User`, `UserID`, `UserIDFromString`, `Credential`, `CredentialFromRow`, `UserFromRow`, `JWTConfig`, `AccessToken`, `IssuedRefreshToken`, `IssuedTokenPair`, `GenerateTokenPairInput`, `BuildTokenPairView`, `TokenPair` + аддитивные расширения `GenerateTokenPair`, `BuildResponse`.
+- S3 (спроектирован, ожидает реализации) — `LoginSession`, `LoginSessionID` + аддитивные расширения `LoginSessionIDFromString`, `LoginSessionFromRow`. **S3 должен быть реализован и смержен в main до начала реализации S4.**
+- Тикет техдолга S1/S2 (`refactor/s1-s2-store` в root `backlog.md`) **должен быть закрыт до начала реализации S4** — иначе `wire.go` будет содержать смешанный стиль `Deps`.
+
+**Ветка:** `feat/slice-sessions-finish`
+
+**Внешние зависимости (новые go.mod записи):** —
+
+S4 не вводит новых внешних зависимостей: `github.com/go-webauthn/webauthn` (через `protocol`-подпакет) уже подключён в S2 и используется в S4 для `parseAssertion` и `verifyAssertion`. `github.com/golang-jwt/jwt/v5` подключён в S2 и переиспользуется через экспорт `GenerateTokenPair`. `github.com/descope/virtualwebauthn` уже в test-deps (для `verifyAttestation` в S2 и компонентных тестов).
+
+**Definition of Done:**
+
+- [ ] **аддитивные расширения слайса 2**: экспортированы `GenerateTokenPair(input GenerateTokenPairInput) (IssuedTokenPair, error)` и `BuildResponse(view BuildTokenPairView) TokenPair` (публичные обёртки над пакетными `generateTokenPair`/`buildResponse`). Юнит-тесты S2 остаются зелёными (без изменения существующих тестов; тесты вызывают публичные имена).
+- [ ] **аддитивные расширения слайса 3**: экспортированы `LoginSessionIDFromString(s string) (LoginSessionID, error)` и `LoginSessionFromRow(rowID, rowUserID string, rowChallenge []byte, rowExpiresAtUnix int64) (LoginSession, error)`. Юнит-тесты S3 остаются зелёными.
+- [ ] **техдолг S1/S2 (Store-объект) закрыт** — `refactor/s1-s2-store` (root `backlog.md`) смержен в main до начала реализации S4.
+- [ ] ингресс-адаптер реализован: парсит path-параметр и тело в `SessionFinishRequest`, без бизнес-валидации (HTTP handler в `internal/slice/sessions_finish/`).
+- [ ] конструкторы доменных структур (`NewSessionFinishCommand`, `NewFreshLoginSession`) реализованы; невалидные данные → структура не создаётся, возвращается доменная ошибка.
+- [ ] модули логики (`parseAssertion`, `verifyAssertion`) реализованы, контракты выполнены.
+- [ ] **I/O-объект `Store` реализован** как автономный объект, инкапсулирующий `*sql.DB`: тип `*Store` в пакете `internal/slice/sessions_finish/`, конструктор `NewStore(db *sql.DB) *Store`, три метода:
+  - `(s *Store) LoadLoginSession(id LoginSessionID) (LoginSession, error)`: SELECT по id, рехидратор `LoginSessionFromRow`; маппинг `sql.ErrNoRows` → `ErrLoginSessionNotFound`, `SQLITE_BUSY` → `ErrDBLocked`.
+  - `(s *Store) LoadAssertionTarget(input LoadAssertionTargetInput) (AssertionTarget, error)`: SELECT credential по `credential_id` → in-memory проверка `user_id == input.UserID` → SELECT user по `id`; маппинг `sql.ErrNoRows`/mismatch → `ErrCredentialNotFound`, `SQLITE_BUSY` → `ErrDBLocked`. Рехидраторы — `CredentialFromRow`, `UserFromRow` (S2).
+  - `(s *Store) FinishLogin(input FinishLoginInput) error`: атомарная транзакция (3 операции: UPDATE credentials + INSERT refresh_tokens + DELETE login_sessions), откат при любой ошибке; маппинг `SQLITE_BUSY` → `ErrDBLocked`, `SQLITE_FULL` → `ErrDiskFull`.
+  - Голова `ProcessSessionFinish` обращается к БД **только через эти три метода**; `*sql.DB` нигде кроме `Store` не светится в slice-пакете.
+- [ ] головной модуль `ProcessSessionFinish` реализован: пайп из 8 шагов (10 строк с импортированными `GenerateTokenPair` и `BuildResponse`), ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`.
+- [ ] **новых миграций нет** — слайс использует `0003_credentials.sql` (поле `sign_count`), `0004_refresh_tokens.sql` (INSERT), `0005_login_sessions.sql` (DELETE). Никаких ALTER TABLE / новых файлов в `internal/db/migrations/` для S4 не создавать.
+- [ ] инфраструктурный модуль расширен: `Deps` слайса 4 (`Store *Store`, `Clock`, `Logger`, `RP` (S1, нужны `ID` и `Origin`), `JWT` (S2), `Signer` ed25519.PrivateKey — **без** сырого `*sql.DB`); подключение `sessions_finish.Register(mux, deps.SessionsFinish)` в `cmd/api/main.go`; в `wire.go` создаётся `sessions_finish.NewStore(db)` и пробрасывается в `Deps.Store`.
+- [ ] слайс подключён через `sessions_finish.Register(mux, deps)`: HTTP-роут `POST /v1/sessions/{id}/assertion` ведёт на ингресс-адаптер.
+- [ ] **юнит-тесты по формуле написаны и зелёные** — `go test ./...` проходит. **11 новых тестов** на модули логики и конструкторы S4 (`parseAssertion`, `NewSessionFinishCommand`, `NewFreshLoginSession`, `verifyAssertion`); головной модуль, I/O-модули и ингресс-адаптер юнитами не покрываются. `verifyAssertion` honest-тестируется через `virtualwebauthn`. Юниты S1/S2/S3 остаются зелёными после аддитивных расширений (`GenerateTokenPair`, `BuildResponse`, `LoginSessionIDFromString`, `LoginSessionFromRow`).
+- [ ] **компонентные тесты, профиль `healthy`, зелёные** — `./component-tests/scripts/run-tests.sh healthy` проходит. Новые зелёные сценарии: `Сценарий: Завершение входа`, `Сценарий: БД заблокирована при завершении входа` (`sessions.feature`). Ранее зелёные сценарии S1/S2/S3 в `registrations.feature` (Создание challenge регистрации, Завершение регистрации) и `sessions.feature` (Создание challenge входа) продолжают проходить.
+- [ ] **компонентные тесты, профиль `disk-full`, зелёные** — `./component-tests/scripts/run-tests.sh disk-full` проходит. Regression-проверка: `Сценарий: Диск переполнен при завершении регистрации` (`registrations.feature`) из S2 продолжает проходить — изменения S4 (новые экспорты `GenerateTokenPair`/`BuildResponse`, новый слайс) не должны ломать `db_disk_full` маппинг.
+- [ ] сценарии в `sessions-current.feature`/`users.feature` остаются красными в их Then-частях (S5/S6 ещё не реализованы), но **не** ломаются на When-шагах S1–S4 — `POST /v1/sessions/{id}/assertion` возвращает валидные `access_token`/`refresh_token`, которые используются как Bearer-токен в S5/S6.
+- [ ] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`).
+- [ ] `docs/design/passkey-demo/devlog.md` дополнен блоком S4.
+- [ ] PR создан, описание заполнено по шаблону Шага 8 скилла sonnet'а.
+- [ ] PR смержен в main, CI на main зелёный.
+
+**Ссылки на источники:**
+
+- Скилл реализации: `skills/program-implementation/SKILL.md`
+- Граф вызовов: `docs/design/passkey-demo/contracts-graph.md` Slice 04
+- Gherkin-mapping: раздел `## Gherkin-mapping` в `slices/04-sessions-finish.md`
+- Подправило «подтип, не guard»: `skills/program-design/SKILL.md` Шаг 3 (применено в узле (3) `NewFreshLoginSession`; инвариант `AssertionTarget` инкапсулирован в I/O-возврате)
+
+---
+
+## Следующие итерации (S5–S6)
+
+S4 спроектирован, ожидает аппрува оператора и реализации sonnet'ом. После реализации S4 — следующая итерация S5. Каждый слайс — отдельная ветка `feat/design-<slice>`, отдельный PR, отдельный хендофф-чеклист, подписанный оператором.
 
 Очерёдность:
 
-- **S4** `slices/04-sessions-finish.md` — `POST /v1/sessions/{id}/assertion` (верификация assertion, выдача токенов; режим `db_locked` на этом эндпоинте; счётчик signCount) — **следующая итерация**
-- **S5** `slices/05-sessions-logout.md` — `DELETE /v1/sessions/current` (отзыв refresh token)
+- **S5** `slices/05-sessions-logout.md` — `DELETE /v1/sessions/current` (отзыв refresh token) — **следующая итерация после S4**
 - **S6** `slices/06-users-me.md` — `GET /v1/users/me` (профиль пользователя по access token)
 
 Каждая итерация расширяет `messages.md`, `contracts-graph.md` и добавляет тикет в `backlog.md`.

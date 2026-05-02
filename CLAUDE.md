@@ -53,12 +53,16 @@ devlog/
 | README.md | done |
 | Шаблон компонентных тестов (Шаг 2.0) | done |
 | Gherkin-сценарии (Шаг 2) | done |
-| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1 done, S2 next |
+| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1/S2 реализованы, S3/S4 спроектированы (ожидают реализацию) |
 | CI на PR (Шаг 4) | todo |
 
 ## Следующий шаг
 
-Дизайн slice'а S2 (`registrations-finish` — `POST /v1/registrations/{id}/attestation`, фаза 2 регистрации, JWT Ed25519, сущности User+Credential, режим `db_disk_full`). Opus на скилле `program-design`, ветка `feat/design-registrations-finish`. После мержа дизайна — sonnet реализует по тикету.
+Дизайн slice'а S4 (`sessions-finish` — `POST /v1/sessions/{id}/assertion`, фаза 2 входа, верификация assertion, обновление signCount, выдача JWT-пары, режим `db_locked`) — готов в ветке `feat/design-sessions-finish` (ожидает аппрува оператора и мержа). Дальше:
+1. Реализация S3 sonnet'ом (ветка `feat/slice-sessions-start`).
+2. Закрытие техдолга S1/S2 → Store-объект (ветка `refactor/s1-s2-store`).
+3. Реализация S4 sonnet'ом (ветка `feat/slice-sessions-finish`) — после п.1 и п.2.
+4. Дизайн S5 (`sessions-logout`) — opus на скилле `program-design`.
 
 ## Принятые решения
 
