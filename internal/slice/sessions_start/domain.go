@@ -77,7 +77,38 @@ func NewLoginSession(input NewLoginSessionInput) LoginSession {
 	}
 }
 
-func (s LoginSession) ID() LoginSessionID    { return s.id }
-func (s LoginSession) UserID() s2.UserID     { return s.userID }
+func (s LoginSession) ID() LoginSessionID      { return s.id }
+func (s LoginSession) UserID() s2.UserID       { return s.userID }
 func (s LoginSession) Challenge() s1.Challenge { return s.challenge }
-func (s LoginSession) ExpiresAt() time.Time  { return s.expiresAt }
+func (s LoginSession) ExpiresAt() time.Time    { return s.expiresAt }
+
+// LoginSessionIDFromString — рехидратор LoginSessionID для path-параметра S4.
+func LoginSessionIDFromString(raw string) (LoginSessionID, error) {
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return LoginSessionID{}, fmt.Errorf("loginSessionID: %w", err)
+	}
+	return LoginSessionID{value: id}, nil
+}
+
+// LoginSessionFromRow восстанавливает сущность из строки login_sessions (для S4).
+func LoginSessionFromRow(rowID, rowUserID string, rowChallenge []byte, rowExpiresAtUnix int64) (LoginSession, error) {
+	id, err := LoginSessionIDFromString(rowID)
+	if err != nil {
+		return LoginSession{}, fmt.Errorf("login session from row: %w", err)
+	}
+	userID, err := s2.UserIDFromString(rowUserID)
+	if err != nil {
+		return LoginSession{}, fmt.Errorf("login session from row: %w", err)
+	}
+	challenge, err := s1.ChallengeFromBytes(rowChallenge)
+	if err != nil {
+		return LoginSession{}, fmt.Errorf("login session from row: %w", err)
+	}
+	return LoginSession{
+		id:        id,
+		userID:    userID,
+		challenge: challenge,
+		expiresAt: time.Unix(rowExpiresAtUnix, 0).UTC(),
+	}, nil
+}

@@ -162,3 +162,15 @@
 **Стоимость сессии:** $8.12. Время API: 18m 15s, wall: 20m 5s. Изменений: +931 / −28 строк.
 Токены claude-opus-4-7: 67 input, 77.5k output, 7.9m cache read, 355.4k cache write ($8.12).
 Токены claude-haiku-4-5: 358 input, 17 output, 0 cache read, 0 cache write ($0.0004).
+
+## S4 — реализация sessions-finish (2026-05-02)
+
+**Что сделано:** Реализован slice S4 (`POST /v1/sessions/{id}/assertion`) строго по карточке. 7 файлов в `internal/slice/sessions_finish/` (errors, domain, logic, io, head, handler, register) + 2 тест-файла. Аддитивные расширения S2 (`GenerateTokenPair`, `BuildResponse`) и S3 (`LoginSessionIDFromString`, `LoginSessionFromRow`). 11 юнит-тестов — зелёные. Компонентные тесты профиль `healthy` — зелёные (сценарии «Завершение входа» и «БД заблокирована при завершении входа»).
+
+**Единственная нетривиальная находка:** `ParsedCredentialAssertionData.Verify` в go-webauthn v0.17.0 возвращает только `error` (в отличие от attestation Verify, который возвращает `(WebAuthn, error)`). Начальный вариант с `_, err :=` не скомпилировался — исправлено на `err :=`.
+
+**Регрессия disk-full:** сценарий `Диск переполнен при завершении регистрации` не проходит из-за роста БД после миграции `0005` (S3) — 1.5 MB junk + 2 MB tmpfs уже не хватает. Отложено до S5/S6.
+
+**Стоимость сессии:** $3.72. Время API: 14m 26s, wall: 21m 50s. Изменений: +966 / −102 строк.
+Токены claude-sonnet-4-6: 18.1k input, 55.9k output, 6.9m cache read, 199.5k cache write ($3.72).
+Токены claude-haiku-4-5: 358 input, 14 output, 0 cache read, 0 cache write ($0.0004).
