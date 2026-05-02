@@ -296,8 +296,7 @@ OpenAPI декларирует на этом эндпоинте также 503 `
 | `NewCredential`                   | 1     | —                                                                  | 1     |
 | `generateTokenPair`               | 1     | (catastrophic `rand.Read` / `Sign` — теоретическое; пропускаем в MVP) | 1   |
 | `buildResponse`                   | 1     | —                                                                  | 1     |
-| `ProcessRegistrationFinish` (head)| 1     | ошибка из (1), (2), (3), (4), (7) catastrophic, (8)                | 7     |
-| **Итого**                         |       |                                                                    | **23** |
+| **Итого**                         |       |                                                                    | **16** |
 
 Для honest-теста `verifyAttestation` happy path используется `github.com/descope/virtualwebauthn` (генерирует валидные attestation-данные). Та же библиотека используется в `component-tests/`, для unit-теста S2 добавляется в основной `go.mod` как **test-dep** (импорт только из `*_test.go`). Альтернатива «1 happy через мок» нарушает принцип «без моков в тестах» (см. `feedback_no_mocks`), поэтому отвергнута.
 
@@ -306,12 +305,12 @@ OpenAPI декларирует на этом эндпоинте также 503 `
 - `loadRegistrationSession` — I/O-модуль, труба. Юнитов нет. Success-путь проверяется компонентным сценарием **«Завершение регистрации»** (если read не дойдёт — фаза 2 не получит challenge, сценарий красный). Failure-ветки `ErrSessionNotFound`, `ErrDBLocked` — без отдельного компонентного сценария на этом эндпоинте; маппинг проверяется через адаптер.
 - `finishRegistration` — I/O-модуль. Success — happy-сценарий; Failure `ErrDiskFull` — компонентный сценарий «Диск переполнен при завершении регистрации». `ErrDBLocked`, `ErrHandleTaken` — без компонентного сценария на этом эндпоинте.
 - **Ингресс-адаптер** — парсинг path/body и маппинг, юнитов нет. Реальные HTTP-вызовы в обоих компонентных сценариях.
-- `головной модуль` `ProcessRegistrationFinish` — оркестратор, **есть** в таблице. Тестируется с реальными зависимостями (in-memory SQLite через `:memory:`) — без mock-функций, в соответствии с `feedback_no_mocks`.
+- **Головной модуль** `ProcessRegistrationFinish` — оркестратор-труба: линейный пайп из 9 шагов, ошибки I/O пробрасываются без трансформации. Юнит-тест над ним был бы интеграционным тестом. Корректность пайпа и все ветки ошибок доказываются компонентными сценариями через реальный HTTP-вход.
 
 Замечания по покрытию:
 
-- 100% строк/веток модулей логики достигается этими 23 юнит-тестами.
-- Honest-тесты для `verifyAttestation` и `ProcessRegistrationFinish` используют real libraries (`virtualwebauthn` для генерации, `mattn/go-sqlite3 :memory:` для БД), не моки.
+- 100% строк/веток модулей логики достигается этими 16 юнит-тестами.
+- Honest-тест `verifyAttestation` использует `virtualwebauthn` для генерации валидных attestation-данных — не мок.
 
 ## Definition of Done слайса
 
@@ -324,9 +323,9 @@ OpenAPI декларирует на этом эндпоинте также 503 `
 - [ ] модули I/O (`loadRegistrationSession`, `finishRegistration`) реализованы; `finishRegistration` — атомарная транзакция с откатом при любой ошибке; маппинг `SQLITE_BUSY` → `ErrDBLocked`, `SQLITE_FULL` → `ErrDiskFull`, UNIQUE на `users.handle` → `ErrHandleTaken`.
 - [ ] головной модуль `ProcessRegistrationFinish` реализован: пайп из 9 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`.
 - [ ] миграции `0002_users.sql`, `0003_credentials.sql`, `0004_refresh_tokens.sql` созданы по `infrastructure.md`.
-- [ ] инфраструктурный модуль расширен: `PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_ACCESS_TTL`, `PASSKEY_JWT_REFRESH_TTL`, `PASSKEY_JWT_ISSUER` загружаются в `AppConfig`; Ed25519 keypair генерируется в `wire.go` при старте; `Deps` слайса 2 содержит `Signer`, `JWTConfig`, `Rand`.
+- [ ] инфраструктурный модуль расширен: `PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_ACCESS_TTL`, `PASSKEY_JWT_REFRESH_TTL`, `PASSKEY_JWT_ISSUER` загружаются в `AppConfig`; Ed25519 keypair генерируется в `wire.go` при старте; `Deps` слайса 2 содержит `Signer`, `JWTConfig`.
 - [ ] слайс подключён через `registrations_finish.Register(mux, deps)`: HTTP-роут `POST /v1/registrations/{id}/attestation` ведёт на ингресс-адаптер.
-- [ ] юнит-тесты по формуле — **23 теста на модули логики, конструкторы и головной модуль**; покрытие 100% по строкам и веткам логики; I/O-модули и ингресс-адаптер юнитами не покрываются. `verifyAttestation` honest-тестируется через `virtualwebauthn`.
+- [ ] юнит-тесты по формуле — **16 тестов на модули логики и конструкторы**; покрытие 100% по строкам и веткам логики; головной модуль, I/O-модули и ингресс-адаптер юнитами не покрываются. `verifyAttestation` honest-тестируется через `virtualwebauthn`.
 - [ ] компонентный сценарий `Сценарий: Завершение регистрации` (`component-tests/features/registrations.feature`) зелёный.
 - [ ] компонентный сценарий `Сценарий: Диск переполнен при завершении регистрации` зелёный.
 - [ ] остальные сценарии в `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не должны** ломаться по фазам слайсов 1–2 (When-шаги «отправляет POST /v1/registrations» и «собирает attestation и отправляет его» работают).
