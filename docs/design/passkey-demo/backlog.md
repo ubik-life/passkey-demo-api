@@ -2,7 +2,7 @@
 
 Тикеты для sonnet'а. Один тикет = один слайс = одна ветка = один PR (TBD).
 
-S1 спроектирован и реализован (PR #17). В **этой итерации** спроектирован S2 (`registrations-finish`); S3–S6 будут добавлены в следующих итерациях opus'ом после мержа S2.
+S1 спроектирован и реализован (PR #17). S2 спроектирован и реализован (PR #21). S3–S6 проектируются отдельными итерациями opus'а — следующая итерация S3 (`sessions-start`).
 
 ---
 
@@ -25,8 +25,8 @@ S1 спроектирован и реализован (PR #17). В **этой и
 - [x] **Карточка S2 содержит таблицу `## Gherkin-mapping`: каждый Then-шаг (3 в happy + 2 в `db_disk_full`, всего 5) привязан к узлу графа или маппингу адаптера**
 - [x] **contracts-graph.md дополнен Slice 02: граф согласован (все стрелки `[x]`, включая пункт 5 о покрытии Gherkin)**
 - [x] **Применено подправило «подтип, не guard» (Шаг 3 скилла): `NewFreshRegistrationSession` — конструктор подтипа, инвариант «не истекла» закреплён в типе**
-- [x] Для каждого модуля логики S2 посчитаны юнит-тесты по формуле (23 теста)
-- [x] **В таблице юнит-тестов S2 нет I/O-модулей (`loadRegistrationSession`, `finishRegistration`) и нет ингресс-адаптера: I/O — трубы, проверяются только компонентными сценариями (Шаг 8.1)**
+- [x] Для каждого модуля логики S2 посчитаны юнит-тесты по формуле (16 тестов)
+- [x] **В таблице юнит-тестов S2 нет головного модуля, нет I/O-модулей (`loadRegistrationSession`, `finishRegistration`) и нет ингресс-адаптера: все три — трубы, проверяются только компонентными сценариями (Шаг 8.1)**
 - [x] infrastructure.md дополнен: новые env (`PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_*`), генерация Ed25519 keypair, миграции `0002_users.sql`, `0003_credentials.sql`, `0004_refresh_tokens.sql`, `Deps` слайса 2
 - [x] backlog.md — тикет S2 (см. ниже) с DoD из карточки слайса
 - [x] Оператор аппрувит пакет S2 — @maxmorev, 2026-05-01
@@ -59,7 +59,7 @@ S1 закрыт PR #17. Чеклист сохранён ниже для трас
 - [x] **Карточка S1 содержит таблицу `## Gherkin-mapping`**
 - [x] **contracts-graph.md существует, граф S1 согласован**
 - [x] Для каждого модуля логики S1 посчитаны юнит-тесты по формуле
-- [x] **В таблице юнит-тестов S1 нет I/O-модулей и нет ингресс-адаптера**
+- [x] **В таблице юнит-тестов S1 нет головного модуля, нет I/O-модулей и нет ингресс-адаптера**
 - [x] infrastructure.md — описан инфраструктурный модуль приложения
 - [x] backlog.md — тикеты по одному на slice, с зависимостями
 - [x] Оператор аппрувит пакет — @maxmorev, 2026-05-01
@@ -92,7 +92,7 @@ S1 закрыт PR #17. Чеклист сохранён ниже для трас
 - [x] миграция `internal/db/migrations/0001_registration_sessions.sql` создаёт таблицу `registration_sessions(id PRIMARY KEY, handle, challenge, expires_at)`
 - [x] инфраструктурный модуль (`cmd/api/main.go`, `internal/app/`, `internal/db/`, `internal/clock/`) собран по `infrastructure.md`; placeholder из `devlog/06` заменён на реальный сервер с одним рабочим эндпоинтом и `/health`
 - [x] слайс подключён через `registrations_start.Register(mux, deps)`: HTTP-роут `POST /v1/registrations` ведёт на ингресс-адаптер
-- [x] юнит-тесты по формуле — **14 тестов на модули логики и головной модуль** (см. таблицу в карточке слайса), покрытие 100% по строкам и веткам логики; I/O-модуль и ингресс-адаптер юнитами не покрываются
+- [x] юнит-тесты по формуле — **11 тестов на модули логики и конструкторы** (см. таблицу в карточке слайса), покрытие 100% по строкам и веткам логики; головной модуль, I/O-модуль и ингресс-адаптер юнитами не покрываются
 - [x] компонентный сценарий `Сценарий: Создание challenge регистрации` (`component-tests/features/registrations.feature`) зелёный
 - [x] остальные сценарии в `registrations.feature`, `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не должны** ломаться по фазе 1 регистрации (When «отправляет POST /v1/registrations» возвращает валидный `id` и `options`)
 - [x] локальный CI зелёный (`go test ./...` для юнитов и `./component-tests/scripts/run-tests.sh` для компонентных)
@@ -128,28 +128,27 @@ S1 закрыт PR #17. Чеклист сохранён ниже для трас
 
 **Definition of Done:**
 
-- [ ] **аддитивные расширения S1**: экспортированы `RegistrationSessionFromRow`, `ChallengeFromBytes`, `RegistrationIDFromString`; `RPConfig` расширен полем `Origin`. Юнит-тесты S1 остаются зелёными (без изменения существующих тестов).
-- [ ] ингресс-адаптер реализован: парсит path-параметр `{id}` и тело в `RegistrationFinishRequest`, без бизнес-валидации (HTTP handler в `internal/slice/registrations_finish/`).
-- [ ] конструкторы доменных структур (`NewRegistrationFinishCommand`, `NewFreshRegistrationSession`, `NewUser`, `NewCredential`) реализованы; невалидные данные → структура не создаётся, возвращается доменная ошибка.
-- [ ] модули логики (`parseAttestation`, `verifyAttestation`, `generateUserID`, `generateTokenPair`, `buildResponse`) реализованы, контракты выполнены.
-- [ ] модули I/O реализованы:
+- [x] **аддитивные расширения S1**: экспортированы `RegistrationSessionFromRow`, `ChallengeFromBytes`, `RegistrationIDFromString`; `RPConfig` расширен полем `Origin`. Юнит-тесты S1 остаются зелёными (без изменения существующих тестов).
+- [x] ингресс-адаптер реализован: парсит path-параметр `{id}` и тело в `RegistrationFinishRequest`, без бизнес-валидации (HTTP handler в `internal/slice/registrations_finish/`).
+- [x] конструкторы доменных структур (`NewRegistrationFinishCommand`, `NewFreshRegistrationSession`, `NewUser`, `NewCredential`) реализованы; невалидные данные → структура не создаётся, возвращается доменная ошибка.
+- [x] модули логики (`parseAttestation`, `verifyAttestation`, `generateUserID`, `generateTokenPair`, `buildResponse`) реализованы, контракты выполнены.
+- [x] модули I/O реализованы:
   - `loadRegistrationSession`: SELECT по id, рехидратор `RegistrationSessionFromRow`; маппинг `sql.ErrNoRows → ErrSessionNotFound`, `SQLITE_BUSY → ErrDBLocked`.
   - `finishRegistration`: одна транзакция, 4 операции; маппинг `SQLITE_CONSTRAINT_UNIQUE` на `users.handle → ErrHandleTaken`, `SQLITE_BUSY → ErrDBLocked`, `SQLITE_FULL → ErrDiskFull`.
-- [ ] головной модуль `ProcessRegistrationFinish` реализован: пайп из 9 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`.
-- [ ] миграции `internal/db/migrations/0002_users.sql`, `0003_credentials.sql`, `0004_refresh_tokens.sql` созданы по `infrastructure.md`.
-- [ ] инфраструктурный модуль расширен: `PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_ACCESS_TTL`, `PASSKEY_JWT_REFRESH_TTL`, `PASSKEY_JWT_ISSUER` загружаются в `AppConfig`; Ed25519 keypair генерируется в `wire.go` при старте; `Deps` слайса 2 содержит `Signer`, `JWTConfig`, `Rand`.
-- [ ] слайс подключён через `registrations_finish.Register(mux, deps)`: HTTP-роут `POST /v1/registrations/{id}/attestation` ведёт на ингресс-адаптер.
-- [ ] юнит-тесты по формуле — **23 теста** (см. таблицу в карточке слайса); покрытие 100% по строкам и веткам логики; I/O-модули и ингресс-адаптер юнитами не покрываются.
-- [ ] `verifyAttestation` honest-тестируется через `virtualwebauthn` (без моков; happy + ветка с побитой подписью).
-- [ ] `ProcessRegistrationFinish` honest-тестируется с in-memory SQLite (`mattn/go-sqlite3 :memory:`); без моков по `feedback_no_mocks`.
-- [ ] компонентный сценарий `Сценарий: Завершение регистрации` (`component-tests/features/registrations.feature`) зелёный.
-- [ ] компонентный сценарий `Сценарий: Диск переполнен при завершении регистрации` зелёный.
-- [ ] остальные сценарии в `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не** ломаются по фазам S1+S2 (When-шаги «отправляет POST /v1/registrations» и «собирает attestation и отправляет его» работают).
-- [ ] локальный CI зелёный (`go test ./...` для юнитов и `./component-tests/scripts/run-tests.sh` для компонентных, оба профиля `healthy` и `disk-full`).
-- [ ] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`).
-- [ ] `docs/design/passkey-demo/devlog.md` дополнен блоком S2 (формат: `## S2 — HTTP POST /v1/registrations/{id}/attestation (<YYYY-MM-DD>)` + что сделано / решения / что застряло / тесты).
-- [ ] PR создан, описание заполнено по шаблону Шага 8 скилла sonnet'а.
-- [ ] PR смержен в main, CI на main зелёный.
+- [x] головной модуль `ProcessRegistrationFinish` реализован: пайп из 9 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`.
+- [x] миграции `internal/db/migrations/0002_users.sql`, `0003_credentials.sql`, `0004_refresh_tokens.sql` созданы по `infrastructure.md`.
+- [x] инфраструктурный модуль расширен: `PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_ACCESS_TTL`, `PASSKEY_JWT_REFRESH_TTL`, `PASSKEY_JWT_ISSUER` загружаются в `AppConfig`; Ed25519 keypair генерируется в `wire.go` при старте; `Deps` слайса 2 содержит `Signer`, `JWTConfig`.
+- [x] слайс подключён через `registrations_finish.Register(mux, deps)`: HTTP-роут `POST /v1/registrations/{id}/attestation` ведёт на ингресс-адаптер.
+- [x] юнит-тесты по формуле — **16 тестов** на модули логики и конструкторы (головной модуль, I/O-модули и ингресс-адаптер юнитами не покрываются).
+- [x] `verifyAttestation` honest-тестируется через `virtualwebauthn` (без моков; happy + ветка с побитой подписью).
+- [x] компонентный сценарий `Сценарий: Завершение регистрации` (`component-tests/features/registrations.feature`) зелёный.
+- [x] компонентный сценарий `Сценарий: Диск переполнен при завершении регистрации` зелёный.
+- [x] остальные сценарии в `sessions.feature`, `sessions-current.feature`, `users.feature` остаются красными в их Then-частях, но **не** ломаются по фазам S1+S2 (When-шаги «отправляет POST /v1/registrations» и «собирает attestation и отправляет его» работают).
+- [x] локальный CI зелёный (`go test ./...` для юнитов и `./component-tests/scripts/run-tests.sh` для компонентных, оба профиля `healthy` и `disk-full`).
+- [x] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`).
+- [x] `docs/design/passkey-demo/devlog.md` дополнен блоком S2.
+- [x] PR создан, описание заполнено по шаблону Шага 8 скилла sonnet'а.
+- [x] PR смержен в main, CI на main зелёный.
 
 **Ссылки на источники:**
 
@@ -160,13 +159,15 @@ S1 закрыт PR #17. Чеклист сохранён ниже для трас
 
 ---
 
-## Заметка для следующих итераций (S3–S6)
+## Следующие итерации (S3–S6)
 
-Когда S2 смержен и зелёный, opus возвращается на `program-design.skill` и наполняет:
+S2 смержен и зелёный (PR #21). Opus проектирует S3–S6 по одному, каждый слайс — отдельная ветка `feat/design-<slice>`, отдельный PR, отдельный хендофф-чеклист, подписанный оператором.
 
-- `slices/03-sessions-start.md` (фаза 1 входа)
-- `slices/04-sessions-finish.md` (режим `db_locked` на этом эндпоинте; здесь же интеграция со счётчиком signCount)
-- `slices/05-sessions-logout.md`
-- `slices/06-users-me.md`
+Очерёдность:
 
-Каждая итерация — отдельный `feat/design-<slice>` PR с расширением `messages.md`, `contracts-graph.md` и `backlog.md`. Хендофф-чеклист переподписывается оператором на каждой итерации.
+- **S3** `slices/03-sessions-start.md` — `POST /v1/sessions` (фаза 1 входа: challenge + поиск credential) — **следующая итерация**
+- **S4** `slices/04-sessions-finish.md` — `POST /v1/sessions/{id}/assertion` (верификация assertion, выдача токенов; режим `db_locked` на этом эндпоинте; счётчик signCount)
+- **S5** `slices/05-sessions-logout.md` — `DELETE /v1/sessions/current` (отзыв refresh token)
+- **S6** `slices/06-users-me.md` — `GET /v1/users/me` (профиль пользователя по access token)
+
+Каждая итерация расширяет `messages.md`, `contracts-graph.md` и добавляет тикет в `backlog.md`.
