@@ -8,7 +8,7 @@ func ProcessRegistrationFinish(req RegistrationFinishRequest, deps Deps) (TokenP
 		return TokenPair{}, fmt.Errorf("command: %w", err)
 	}
 
-	session, err := loadRegistrationSession(deps.DB, cmd.RegID())
+	session, err := deps.Store.LoadSession(cmd.RegID())
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("load session: %w", err)
 	}
@@ -48,7 +48,7 @@ func ProcessRegistrationFinish(req RegistrationFinishRequest, deps Deps) (TokenP
 		RefreshExpiresAt: issued.Refresh.ExpiresAt(),
 		RegistrationID:   fresh.ID(),
 	}
-	if err := finishRegistration(deps.DB, finishInput); err != nil {
+	if err := deps.Store.Finish(finishInput); err != nil {
 		return TokenPair{}, fmt.Errorf("finish: %w", err)
 	}
 

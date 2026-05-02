@@ -11,14 +11,20 @@ import (
 	s1 "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
 )
 
-func loadRegistrationSession(db *sql.DB, id s1.RegistrationID) (s1.RegistrationSession, error) {
+// Store — автономный модуль работы с БД. Инкапсулирует *sql.DB;
+// головной модуль знает только методы, не зависимости.
+type Store struct{ db *sql.DB }
+
+func NewStore(db *sql.DB) Store { return Store{db: db} }
+
+func (s Store) LoadSession(id s1.RegistrationID) (s1.RegistrationSession, error) {
 	var (
 		rowID        string
 		rowHandle    string
 		rowChallenge []byte
 		rowExpiresAt int64
 	)
-	err := db.QueryRowContext(
+	err := s.db.QueryRowContext(
 		context.Background(),
 		`SELECT id, handle, challenge, expires_at FROM registration_sessions WHERE id = ?`,
 		id.String(),
@@ -36,8 +42,8 @@ func loadRegistrationSession(db *sql.DB, id s1.RegistrationID) (s1.RegistrationS
 	return session, nil
 }
 
-func finishRegistration(db *sql.DB, input FinishRegistrationInput) error {
-	tx, err := db.BeginTx(context.Background(), nil)
+func (s Store) Finish(input FinishRegistrationInput) error {
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return mapSQLiteErrWrite(err)
 	}

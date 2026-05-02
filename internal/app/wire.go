@@ -39,7 +39,7 @@ func Build(cfg AppConfig, db *sql.DB, log *slog.Logger, clk clock.Clock, signer 
 	return WiredDeps{
 		RegistrationsStart: s1.NewDeps(db, clk, log, cfg.RP, cfg.ChallengeTTL),
 		RegistrationsFinish: rf.Deps{
-			DB:     db,
+			Store:  rf.NewStore(db),
 			Clock:  clk,
 			Logger: log,
 			RP:     cfg.RP,

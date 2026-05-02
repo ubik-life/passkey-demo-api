@@ -2,7 +2,6 @@ package registrations_finish
 
 import (
 	"crypto/ed25519"
-	"database/sql"
 	"io"
 	"log/slog"
 
@@ -12,8 +11,9 @@ import (
 )
 
 // Deps — зависимости слайса 2. Инжектируются wire.go.
+// Store автономен: head-модуль не знает про *sql.DB.
 type Deps struct {
-	DB     *sql.DB
+	Store  Store
 	Clock  clock.Clock
 	Logger *slog.Logger
 	RP     s1.RPConfig

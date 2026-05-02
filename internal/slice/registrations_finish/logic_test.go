@@ -229,7 +229,7 @@ func buildDeps(t *testing.T, db *sql.DB) Deps {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	return Deps{
-		DB:     db,
+		Store:  NewStore(db),
 		Clock:  testClock{time.Now()},
 		Logger: nil,
 		RP:     s1.RPConfig{Name: "Passkey Demo", ID: "localhost", Origin: "http://localhost"},
