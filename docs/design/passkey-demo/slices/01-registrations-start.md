@@ -39,12 +39,16 @@
     ├── (2) generateChallenge()                      → Challenge             [логика-лист]
     ├── (3) generateRegistrationID()                 → RegistrationID        [логика-лист]
     ├── (4) NewRegistrationSession(input)            → RegistrationSession   [конструктор-сборщик]
-    ├── (5) persistRegistrationSession(s)            → error                 [I/O — SQLite write; dep: db]
+    ├── (5) Store.PersistRegistrationSession(s)      → error                 [I/O-метод — SQLite write]
     ├── (6) buildCreationOptions(s)                  → CreationOptions       [логика; dep: rpConfig]
     └── (7) buildResponse(view)                      → RegistrationStartResponse  [логика]
 ```
 
-Каждый узел — **один data-аргумент** (Шаг 3 скилла opus'а). Зависимости (`db`, `rpConfig`, `clock`) вынесены и не считаются стрелками графа.
+Каждый узел — **один data-аргумент** (Шаг 3 скилла opus'а). Зависимости (`rpConfig`, `clock`, `Store`) вынесены и не считаются стрелками графа.
+
+**Автономный I/O-объект `Store` (Шаг 6 скилла).** Узел (5) — метод объекта `Store` слайса 1, инкапсулирующего `*sql.DB`. Головной модуль `ProcessRegistrationStart` знает только API объекта (метод `PersistRegistrationSession`), но не его внутреннюю зависимость. В `Deps` слайса — поле типа `*Store`, **не** сырой `*sql.DB`. См. `messages.md` → секция «I/O-объект слайса 1» и `infrastructure.md` → «Подключение слайса 1».
+
+> **Техдолг кода S1.** Карточка дизайна отражает целевое состояние. Реализация в коде (`internal/slice/registrations_start/`) пока держит `*sql.DB` напрямую в `Deps` и `persistRegistrationSession` — пакетная функция (см. PR #17). Рефакторинг кода под `Store`-объект — отдельный тикет в `backlog.md` (root), закроется одним PR с аналогичным рефакторингом S2.
 
 ## Псевдокод пайпа головного модуля
 
@@ -59,7 +63,7 @@ ProcessRegistrationStart(req: RegistrationStartRequest, deps: Deps)
                                              TTL: deps.cfg.ChallengeTTL,
                                              Now: deps.clock.Now() }
     | NewRegistrationSession(input)                  -> RegistrationSession
-    | persistRegistrationSession(session)             -> error    [dep: deps.db]
+    | deps.Store.PersistRegistrationSession(session) -> error
     | buildCreationOptions(session)                   -> CreationOptions  [dep: deps.cfg.RP]
     | view := RegistrationStartView{ Session, Options }
     | buildResponse(view)                             -> RegistrationStartResponse
@@ -129,17 +133,17 @@ ProcessRegistrationStart(req: RegistrationStartRequest, deps: Deps)
   - Success: `RegistrationSession` с `expiresAt = input.Now + input.TTL`.
   - Failure не возвращается — все доменные инварианты уже проверены конструкторами вложенных сущностей; `TTL > 0` гарантируется конфигом, `Now` не «проваливается».
 
-### `persistRegistrationSession`
+### `Store.PersistRegistrationSession` (метод I/O-объекта)
 
-- **Сигнатура:** `persistRegistrationSession(s RegistrationSession) -> error`
-- **Input (data):** `s RegistrationSession`
-- **Dependencies (deps):** `*sql.DB`
+- **Сигнатура:** `(s *Store) PersistRegistrationSession(rs RegistrationSession) -> error`
+- **Input (data):** `rs RegistrationSession`
+- **Dependencies (deps):** — (зависимость `*sql.DB` инкапсулирована внутри `Store`; головной модуль её не видит)
 - **Что делает:** одной транзакцией вставляет запись в таблицу `registration_sessions(id, handle, challenge, expires_at)`.
 - **Антецедент:**
-  - `s` — валидная доменная сущность (гарантировано `NewRegistrationSession`);
-  - `db` — открытый пул соединений, миграция применена.
+  - `rs` — валидная доменная сущность (гарантировано `NewRegistrationSession`);
+  - миграция `0001` применена.
 - **Консеквент:**
-  - Success: запись в БД, `expires_at = s.ExpiresAt()`.
+  - Success: запись в БД, `expires_at = rs.ExpiresAt()`.
   - Failure:
     - `ErrDBLocked` — `SQLITE_BUSY` (lock contention), запись **не** создана. Маппится ингресс-адаптером в 503 + `Retry-After`.
     - `ErrDiskFull` — `SQLITE_FULL` (диск переполнен), запись **не** создана. Маппится в 507.
@@ -212,7 +216,7 @@ ProcessRegistrationStart(req: RegistrationStartRequest, deps: Deps)
 Сценарии «Завершение регистрации» и «Диск переполнен при завершении регистрации» используют этот слайс через When-шаги. Чтобы они прошли:
 
 - ингресс-адаптер должен возвращать **сериализуемый** `RegistrationStartResponse` (godog WebAuthn-степ парсит тело и собирает attestation из `options.challenge`);
-- I/O `persistRegistrationSession` должен **реально записать** challenge в БД, чтобы фаза 2 (слайс 2) могла его прочитать.
+- метод `Store.PersistRegistrationSession` должен **реально записать** challenge в БД, чтобы фаза 2 (слайс 2) могла его прочитать.
 
 Эти неявные требования покрыты контрактом (`buildResponse` строит правильный JSON; I/O имеет Success-ветку, гарантирующую запись), но **не** добавляют строк в таблицу Gherkin-mapping этого слайса — они формализуются как стрелки графа в `contracts-graph.md` и проверяются интеграционно через сценарии слайса 2.
 
@@ -233,7 +237,7 @@ ProcessRegistrationStart(req: RegistrationStartRequest, deps: Deps)
 
 Что **не** в таблице (и почему):
 
-- `persistRegistrationSession` — I/O-модуль, по сути труба. Юнитов нет. Success-путь проверяется компонентным сценарием **«Создание challenge регистрации»** (этого слайса; если запись не дойдёт в БД — фаза 2 в сценариях 2-3 не сможет прочитать challenge, упадут). Failure-ветки `ErrDBLocked` / `ErrDiskFull` проверяются компонентными сценариями **других слайсов** по правилу различимости: `db_locked` → слайс 4 (`POST /v1/sessions/{id}/assertion`), `db_disk_full` → слайс 2 (`POST /v1/registrations/{id}/attestation`). На уровне маппинга ошибок в HTTP-статус **слайс 1 обязан** их корректно отдавать (503/507), но Gherkin-сценария на эту тему именно для `POST /v1/registrations` нет — это сознательный выбор в раскладке режимов отказа.
+- `Store.PersistRegistrationSession` — метод I/O-объекта, по сути труба. Юнитов нет. Success-путь проверяется компонентным сценарием **«Создание challenge регистрации»** (этого слайса; если запись не дойдёт в БД — фаза 2 в сценариях 2-3 не сможет прочитать challenge, упадут). Failure-ветки `ErrDBLocked` / `ErrDiskFull` проверяются компонентными сценариями **других слайсов** по правилу различимости: `db_locked` → слайс 4 (`POST /v1/sessions/{id}/assertion`), `db_disk_full` → слайс 2 (`POST /v1/registrations/{id}/attestation`). На уровне маппинга ошибок в HTTP-статус **слайс 1 обязан** их корректно отдавать (503/507), но Gherkin-сценария на эту тему именно для `POST /v1/registrations` нет — это сознательный выбор в раскладке режимов отказа.
 - **Ингресс-адаптер** — парсинг и маппинг ошибок, юнитов нет. Проверяется реальным HTTP-вызовом в компонентном сценарии.
 - **Головной модуль** (`ProcessRegistrationStart`) — оркестратор-труба: каждый шаг вызывает ровно один дочерний модуль, ошибки I/O пробрасываются без трансформации. Юнит-тест над ним был бы интеграционным тестом. Корректность пайпа и все ветки ошибок доказываются компонентными сценариями через реальный HTTP-вход.
 
@@ -249,7 +253,7 @@ ProcessRegistrationStart(req: RegistrationStartRequest, deps: Deps)
 - [ ] ингресс-адаптер реализован: парсит JSON в `RegistrationStartRequest`, без бизнес-валидации
 - [ ] конструкторы доменных структур (`NewHandle`, `NewRegistrationStartCommand`, `NewRegistrationSession`) реализованы: проверяют антецедент, при невалидных данных возвращают ошибку
 - [ ] модули логики (`generateChallenge`, `generateRegistrationID`, `buildCreationOptions`, `buildResponse`) реализованы, контракты выполнены
-- [ ] модуль I/O (`persistRegistrationSession`) реализован, оборачивает SQLITE_BUSY → `ErrDBLocked`, SQLITE_FULL → `ErrDiskFull`
+- [ ] **I/O-объект `Store` реализован** как автономный объект, инкапсулирующий `*sql.DB`: тип `*Store`, конструктор `NewStore(db *sql.DB) *Store`, метод `(s *Store) PersistRegistrationSession(rs RegistrationSession) error` оборачивает SQLITE_BUSY → `ErrDBLocked`, SQLITE_FULL → `ErrDiskFull`. `*sql.DB` нигде кроме `Store` не светится в slice-пакете.
 - [ ] головной модуль `ProcessRegistrationStart` реализован: пайп из 7 шагов, ранний возврат при ошибке
 - [ ] миграция `0001_registration_sessions.sql` создаёт таблицу `registration_sessions(id PRIMARY KEY, handle, challenge, expires_at)`
 - [ ] слайс подключён в инфраструктурном модуле: HTTP-роут `POST /v1/registrations` ведёт на ингресс-адаптер

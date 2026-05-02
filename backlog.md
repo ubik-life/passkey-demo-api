@@ -140,6 +140,25 @@ S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 
 
 **Definition of Done Шага 3:** все 6 slice'ов закрыты, все компонентные сценарии зелёные, `devlog/03-go-server.md` зафиксирован, CI на main зелёный.
 
+### Тикет S1/S2-refactor — Store-объект, убрать сырой `*sql.DB` из Deps
+
+**Зачем.** В коде S1 и S2 (PR #17, PR #21) `Deps` хранит `*sql.DB` напрямую, а I/O-операции (`persistRegistrationSession`, `loadRegistrationSession`, `finishRegistration`) — пакетные функции. Это нарушение Шага 6 скилла `program-design` («Правило автономного IO-объекта») и `feedback_io_autonomous_store` в памяти агента: головной модуль не должен видеть сырую БД-зависимость, она должна быть инкапсулирована в объекте `Store`. В S3 (дизайн уже принят) это правило соблюдено; карточки дизайна S1/S2 после правки 2026-05-02 тоже отражают целевое состояние, но **код S1/S2 ещё не обновлён**.
+
+Долг не правился в ветке `feat/design-sessions-start` по правилу «связанные правки — одна ветка»: ветка дизайна S3 не должна расширяться на рефакторинг реализаций S1/S2.
+
+**Когда делать.** До дизайна S4 — иначе sonnet, реализующий S4, увидит расхождение между карточками S1/S2 (новый стиль) и кодом (старый стиль). Лучший момент: одной refactor-сессией оператора **сразу после мержа S3-дизайна**.
+
+**Что сделать (один PR на оба слайса):**
+
+- [ ] **S1.** В пакете `internal/slice/registrations_start/` ввести тип `Store struct { db *sql.DB }`, конструктор `NewStore(db *sql.DB) *Store`, метод `(s *Store) PersistRegistrationSession(rs RegistrationSession) error`. Удалить пакетную функцию `persistRegistrationSession`. В `Deps` заменить поле `DB *sql.DB` на `Store *Store`. В `internal/app/wire.go` вызвать `registrations_start.NewStore(db)` и положить в `deps.RegistrationsStart.Store`.
+- [ ] **S2.** То же для `internal/slice/registrations_finish/`: тип `Store`, методы `LoadRegistrationSession` и `FinishRegistration`. Удалить пакетные функции. В `Deps` заменить `DB *sql.DB` на `Store *Store`. Wire — `registrations_finish.NewStore(db)`.
+- [ ] **Юнит-тесты.** Если в S1/S2 есть юниты, использующие `Deps.DB` напрямую, перевести на `Deps.Store` (методы вызывать через объект; in-memory SQLite остаётся внутри `Store`).
+- [ ] **Компонентные тесты.** Не трогать — они работают через HTTP, не через `Deps`. Должны оставаться зелёными.
+- [ ] `go test ./...` зелёный, `./component-tests/scripts/run-tests.sh healthy` зелёный.
+- [ ] Devlog `docs/design/passkey-demo/devlog.md` дополнен блоком «Рефакторинг S1/S2 → Store-объект».
+
+**Ветка:** `refactor/s1-s2-store`. Один коммит — один логический шаг (S1, потом S2, потом тесты), коммитить через Conventional Commits (`refactor(slice): ...`).
+
 ### Шаг 4 — CI на PR
 
 Запускается **после Шагов 1–3** (контракт, тесты, реализация). Цель — каждый PR в `main` автоматически проверяется на:

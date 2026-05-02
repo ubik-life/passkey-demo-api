@@ -6,7 +6,7 @@
 |---|-----------|---------------|-------------|------------------|--------|
 | 1 | HTTP | `POST /v1/registrations` | `registrations-start` | Фаза 1 регистрации: принять handle, создать challenge + регистрационную сессию, вернуть `{id, options}` | реализован (PR #17) |
 | 2 | HTTP | `POST /v1/registrations/{id}/attestation` | `registrations-finish` | Фаза 2 регистрации: верифицировать attestation, создать пользователя и credential, выдать JWT-пару | спроектирован |
-| 3 | HTTP | `POST /v1/sessions` | `sessions-start` | Фаза 1 входа: принять handle, найти пользователя и credential, создать challenge, вернуть `{id, options}` | todo |
+| 3 | HTTP | `POST /v1/sessions` | `sessions-start` | Фаза 1 входа: принять handle, найти пользователя и credential, создать challenge, вернуть `{id, options}` | спроектирован |
 | 4 | HTTP | `POST /v1/sessions/{id}/assertion` | `sessions-finish` | Фаза 2 входа: верифицировать assertion, обновить счётчик, выдать JWT-пару | todo |
 | 5 | HTTP | `DELETE /v1/sessions/current` | `sessions-logout` | Инвалидация refresh token текущей сессии | todo |
 | 6 | HTTP | `GET /v1/users/me` | `users-me` | Возврат данных пользователя из access token | todo |

@@ -168,7 +168,29 @@ var (
 )
 ```
 
-Класс выбирается через `errors.Is(err, ErrXxx)` в маппинге ингресс-адаптера. I/O-модуль `persistRegistrationSession` оборачивает низкоуровневые ошибки SQLite в эти sentinel-значения через `fmt.Errorf("...: %w", ErrDBLocked)`.
+Класс выбирается через `errors.Is(err, ErrXxx)` в маппинге ингресс-адаптера. Метод `Store.PersistRegistrationSession` оборачивает низкоуровневые ошибки SQLite в эти sentinel-значения через `fmt.Errorf("...: %w", ErrDBLocked)`.
+
+### I/O-объект слайса 1 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 1 — поле `Store *Store`, не сырой `*sql.DB`.
+
+```go
+// Store — автономный I/O-объект слайса 1, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — головной модуль обращается к БД исключительно через методы.
+type Store struct {
+    db *sql.DB
+}
+
+func NewStore(db *sql.DB) *Store
+
+// PersistRegistrationSession — write-метод. Контракт: см. slices/01-registrations-start.md.
+//
+// Внутри: INSERT INTO registration_sessions (id, handle, challenge, expires_at) VALUES (?, ?, ?, ?).
+// Маппинг: SQLITE_BUSY → ErrDBLocked, SQLITE_FULL → ErrDiskFull.
+func (s *Store) PersistRegistrationSession(rs RegistrationSession) error
+```
+
+> **Техдолг кода S1.** В реализации (`internal/slice/registrations_start/`, PR #17) `*sql.DB` лежит сырым в `Deps`, `persistRegistrationSession` — пакетная функция. Карточка дизайна отражает целевое состояние; рефакторинг кода — отдельный тикет в `backlog.md` (root).
 
 ## Структуры слайса 2 — `registrations-finish`
 
@@ -176,7 +198,7 @@ var (
 
 ### Аддитивные расширения слайса 1 (рехидратор)
 
-`RegistrationSession` сейчас собирается только через `NewRegistrationSession(NewRegistrationSessionInput)` (с TTL и Now). Чтобы I/O `loadRegistrationSession` слайса 2 мог восстановить сущность из строки БД (`expires_at` уже посчитан), слайс 1 экспортирует:
+`RegistrationSession` сейчас собирается только через `NewRegistrationSession(NewRegistrationSessionInput)` (с TTL и Now). Чтобы метод `Store.LoadRegistrationSession` слайса 2 мог восстановить сущность из строки БД (`expires_at` уже посчитан), слайс 1 экспортирует:
 
 ```go
 // RegistrationSessionFromRow восстанавливает сущность из строки БД.
@@ -460,24 +482,39 @@ var (
 
 `ErrHandleTaken` — race-condition: между `POST /v1/registrations` user A и `POST /v1/registrations/{id}/attestation` user A кто-то зарегистрировался под тем же handle. Маппится в `422 HANDLE_TAKEN`. Pre-check `findUserByHandle` не делаем — лишний раунд-трип не закрывает race; UNIQUE-констрейнт в любом случае единственная честная защита.
 
-### I/O контракты
+### I/O-объект слайса 2 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 2 — поле `Store *Store`, не сырой `*sql.DB`.
 
 ```go
-// loadRegistrationSession читает запись из registration_sessions по id.
-// Внутри: SELECT id, handle, challenge, expires_at FROM registration_sessions WHERE id = ?
-// Если строки нет — ErrSessionNotFound. SQLite-ошибки оборачиваются в стандартный класс.
-func loadRegistrationSession(id RegistrationID) (RegistrationSession, error)
-// deps: *sql.DB
-// Антецедент: id — валидный UUID; миграции применены.
-// Консеквент:
-//   Success: RegistrationSession, восстановленная через RegistrationSessionFromRow.
-//   Failure: ErrSessionNotFound, ErrDBLocked, низкоуровневые SQLite (→ 500).
+// Store — автономный I/O-объект слайса 2, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — головной модуль обращается к БД исключительно через методы.
+type Store struct {
+    db *sql.DB
+}
 
-// finishRegistration выполняет одну транзакцию:
+func NewStore(db *sql.DB) *Store
+
+// LoadRegistrationSession — read-метод. Контракт: см. slices/02-registrations-finish.md.
+//
+// Внутри: SELECT id, handle, challenge, expires_at FROM registration_sessions WHERE id = ?
+// Если строки нет — ErrSessionNotFound.
+// Маппинг: SQLITE_BUSY → ErrDBLocked. ErrDiskFull для read не различается.
+// Рехидрирует через RegistrationSessionFromRow (S1).
+func (s *Store) LoadRegistrationSession(id RegistrationID) (RegistrationSession, error)
+
+// FinishRegistration — write-метод (атомарная транзакция, 4 операции).
+// Контракт: см. slices/02-registrations-finish.md.
+//
+// Внутри одной транзакции:
 //   INSERT INTO users (id, handle, created_at) VALUES (...)
 //   INSERT INTO credentials (credential_id, user_id, public_key, sign_count, transports, created_at) VALUES (...)
 //   INSERT INTO refresh_tokens (token_hash, user_id, expires_at) VALUES (...)
 //   DELETE FROM registration_sessions WHERE id = ?
+// При любой ошибке tx откатывается — ни одна из 4 операций не остаётся применённой.
+//
+// Маппинг: SQLITE_CONSTRAINT_UNIQUE на users.handle → ErrHandleTaken (race-condition);
+//          SQLITE_BUSY → ErrDBLocked; SQLITE_FULL → ErrDiskFull.
 type FinishRegistrationInput struct {
     User             User
     Credential       Credential
@@ -486,19 +523,231 @@ type FinishRegistrationInput struct {
     RegistrationID   RegistrationID
 }
 
-func finishRegistration(input FinishRegistrationInput) error
-// deps: *sql.DB
-// Антецедент: все доменные значения валидны; миграции 0001-0004 применены.
-// Консеквент:
-//   Success: все 4 операции прошли; tx закоммичена.
-//   Failure:
-//     ErrHandleTaken — UNIQUE violation на users.handle (race);
-//     ErrDBLocked — SQLITE_BUSY;
-//     ErrDiskFull — SQLITE_FULL;
-//     любой другой провал tx — низкоуровневая ошибка (→ 500).
-// Атомарность: при любой ошибке tx откатывается, ни одна из 4 операций не остаётся применённой.
+func (s *Store) FinishRegistration(input FinishRegistrationInput) error
 ```
 
-`finishRegistration` — единственная I/O write-операция слайса. Всё или ничего. Это критично для корректности: иначе при, например, успехе INSERT users + провале INSERT credentials получим «осиротевшего» пользователя без credential, который не сможет войти.
+`Store.FinishRegistration` — единственная I/O write-операция слайса. Всё или ничего. Это критично для корректности: иначе при, например, успехе INSERT users + провале INSERT credentials получим «осиротевшего» пользователя без credential, который не сможет войти.
 
+> **Техдолг кода S2.** В реализации (`internal/slice/registrations_finish/`, PR #21) `*sql.DB` лежит сырым в `Deps`, `loadRegistrationSession`/`finishRegistration` — пакетные функции. Карточка дизайна отражает целевое состояние; рефакторинг кода — отдельный тикет в `backlog.md` (root).
+
+## Структуры слайса 3 — `sessions-start`
+
+Слайс 3 импортирует из слайса 1: `Handle`, `Challenge`, `NewHandle`, `ErrDBLocked`, `ErrDiskFull` и (после аддитивного расширения) `GenerateChallenge`. Из слайса 2: `User`, `Credential`, `UserID` и (после аддитивных расширений) `UserFromRow`, `CredentialFromRow`, `UserIDFromString`.
+
+### Аддитивные расширения слайса 1 для слайса 3
+
+`generateChallenge` сейчас не экспортирована. Чтобы S3 (а далее и S4) могли создавать `Challenge` без дублирования генератора 32 случайных байт, S1 экспортирует:
+
+```go
+// GenerateChallenge — публичная обёртка над generateChallenge.
+// Идентичная семантика: 32 случайных байта из crypto/rand.
+// Реиспользуется S3 и S4.
+func GenerateChallenge() (Challenge, error)
+```
+
+Юнит-теста на `GenerateChallenge` отдельно нет — генератор тот же, что покрыт `generateChallenge` в S1. Если внутренняя `generateChallenge` со временем будет переименована, публичная `GenerateChallenge` остаётся стабильной точкой входа для всех слайсов.
+
+### Аддитивные расширения слайса 2 для слайса 3
+
+`User` и `Credential` сейчас собираются только конструкторами `NewUser` / `NewCredential` (требуют рантайм-значения вроде `CreatedAt`, `Verified`). Чтобы метод `Store.LoadUserCredentials` слайса 3 мог восстановить сущности из строк БД, S2 экспортирует рехидраторы:
+
+```go
+// UserFromRow восстанавливает сущность из строки users(id, handle, created_at).
+// Не валидирует доменные инварианты повторно — данные валидировались при INSERT.
+// Возвращает ошибку только при синтаксической непригодности строк
+// (UUID не парсится, handle не проходит NewHandle).
+func UserFromRow(rowID string, rowHandle string, rowCreatedAtUnix int64) (User, error)
+
+// CredentialFromRow восстанавливает credential из строки
+// credentials(credential_id, user_id, public_key, sign_count, transports, created_at).
+// transports парсится из CSV-строки (см. миграцию 0003).
+func CredentialFromRow(
+    rowCredentialID []byte,
+    rowUserID string,
+    rowPublicKey []byte,
+    rowSignCount uint32,
+    rowTransports string,
+    rowCreatedAtUnix int64,
+) (Credential, error)
+
+// UserIDFromString — рехидратор UserID. Используется CredentialFromRow и в S4
+// (load login session → user_id → load credentials).
+func UserIDFromString(s string) (UserID, error)  // ошибка только если UUID невалиден
+```
+
+`Handle` восстанавливается через существующий `NewHandle(rowHandle)` — длина уже проверена при INSERT, повторная валидация не нагрузка.
+
+### Request DTO (ингресс-адаптер слайса 3)
+
+```go
+// SessionStartRequest — невалидированный вход из HTTP-адаптера.
+// Маппится из тела POST /v1/sessions.
+type SessionStartRequest struct {
+    Handle string `json:"handle"`
+}
+```
+
+### Доменные структуры
+
+```go
+// LoginSessionID — идентификатор сессии входа (UUID v4).
+// Отдельный тип от RegistrationID: разные жизненные циклы, разные таблицы;
+// система типов запрещает передать один туда, где ожидается другой.
+type LoginSessionID struct {
+    value uuid.UUID
+}
+
+func generateLoginSessionID() LoginSessionID
+func (id LoginSessionID) String() string
+func (id LoginSessionID) Bytes() []byte
+
+// SessionStartCommand — валидированная команда фазы 1 входа.
+// Поля неэкспортируемые. Создаётся только через NewSessionStartCommand.
+type SessionStartCommand struct {
+    handle Handle
+}
+
+func NewSessionStartCommand(req SessionStartRequest) (SessionStartCommand, error)
+// Делегирует: NewHandle(req.Handle).
+// Failure: ErrHandleEmpty / ErrHandleTooShort / ErrHandleTooLong
+// (импорт из S1, обёрнутые через fmt.Errorf("handle: %w", err)).
+
+func (c SessionStartCommand) Handle() Handle
+
+// UserWithCredentials — агрегат «пользователь + его непустой список credentials».
+// Создаётся только методом Store.LoadUserCredentials. Поля неэкспортируемые.
+// Инвариант: len(credentials) >= 1 — закодирован в самом существовании структуры.
+// Если в БД нет user или нет credentials — I/O возвращает ErrUserNotFound,
+// и эта структура с пустым списком не существует по построению.
+type UserWithCredentials struct {
+    user        User
+    credentials []Credential
+}
+
+func (u UserWithCredentials) User() User
+func (u UserWithCredentials) Credentials() []Credential  // длина >= 1, гарантированно
+
+// LoginSession — доменная сущность сессии входа.
+// Объединяет всё, что должно быть сохранено и прочитано фазой 2.
+// Поля неэкспортируемые. Создаётся только через NewLoginSession.
+type LoginSession struct {
+    id        LoginSessionID
+    userID    UserID
+    challenge Challenge
+    expiresAt time.Time
+}
+
+// NewLoginSessionInput — value-объект-агрегатор для конструктора.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type NewLoginSessionInput struct {
+    ID        LoginSessionID
+    UserID    UserID
+    Challenge Challenge
+    TTL       time.Duration
+    Now       time.Time
+}
+
+// NewLoginSession собирает доменную сущность.
+// Антецедент: ID и UserID — валидные UUID v4 (гарантировано предыдущими шагами);
+// Challenge — 32 байта; TTL > 0 (из конфига); Now — момент создания.
+// Падений нет — все инварианты на нижних уровнях.
+func NewLoginSession(input NewLoginSessionInput) LoginSession
+
+func (s LoginSession) ID() LoginSessionID
+func (s LoginSession) UserID() UserID
+func (s LoginSession) Challenge() Challenge
+func (s LoginSession) ExpiresAt() time.Time
+```
+
+### Response DTO (формируется логикой, сериализуется адаптером)
+
+```go
+// RequestOptions — подмножество PublicKeyCredentialRequestOptions
+// (WebAuthn Level 2). Точно соответствует схеме OpenAPI.
+type RequestOptions struct {
+    Challenge        string                  `json:"challenge"`        // base64url
+    RpID             string                  `json:"rpId,omitempty"`
+    AllowCredentials []AllowCredentialDescriptor `json:"allowCredentials,omitempty"`
+    UserVerification string                  `json:"userVerification,omitempty"` // "preferred"
+    Timeout          int                     `json:"timeout,omitempty"`
+}
+
+type AllowCredentialDescriptor struct {
+    Type string `json:"type"`           // "public-key"
+    ID   string `json:"id"`             // base64url(credential_id)
+}
+
+// SessionStartResponse — ответ POST /v1/sessions 201.
+type SessionStartResponse struct {
+    ID      string         `json:"id"`      // LoginSessionID.String()
+    Options RequestOptions `json:"options"`
+}
+
+// BuildRequestOptionsInput — value-агрегатор для buildRequestOptions.
+// «Один data-аргумент»: вместо buildRequestOptions(s, creds) — buildRequestOptions(input).
+type BuildRequestOptionsInput struct {
+    Session     LoginSession
+    Credentials []Credential  // непустой по инварианту UserWithCredentials
+}
+
+// SessionStartView — value-агрегатор для buildResponse.
+type SessionStartView struct {
+    Session LoginSession
+    Options RequestOptions
+}
+```
+
+### Ошибки
+
+```go
+// Класс ошибок предусловий для слайса 3.
+// Маппятся ингресс-адаптером в 404 NOT_FOUND.
+var (
+    ErrUserNotFound = errors.New("user: not found")  // → 404 NOT_FOUND
+)
+
+// ErrHandle*, ErrDBLocked, ErrDiskFull импортируются из S1.
+```
+
+`ErrUserNotFound` — единственная новая sentinel-ошибка слайса. Покрывает оба случая (нет user / у user нет credentials), потому что для клиента поведение идентично — пройти регистрацию заново. Различение в логах I/O-объекта.
+
+### I/O-объект слайса 3 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 3 — поле `Store *Store`, не сырой `*sql.DB`. Имя `Store` отражает тип интеграции (БД).
+
+```go
+// Store — автономный I/O-объект слайса 3, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — только методы Store работают с БД,
+// головной модуль обращается к БД исключительно через них.
+type Store struct {
+    db *sql.DB
+}
+
+// NewStore — единственный конструктор. Принимает открытый пул из инфраструктурного
+// модуля (cmd/api/main.go → wire.go), возвращает готовый объект.
+func NewStore(db *sql.DB) *Store
+
+// LoadUserCredentials — read-метод. Контракт: см. slices/03-sessions-start.md.
+//
+// Внутри: SELECT id, handle, created_at FROM users WHERE handle = ?
+//          (если нет строки → ErrUserNotFound),
+//          SELECT credential_id, user_id, public_key, sign_count, transports, created_at
+//            FROM credentials WHERE user_id = ?
+//          (если нет строк → ErrUserNotFound),
+//          сборка UserWithCredentials через UserFromRow / CredentialFromRow (S2).
+//
+// Маппинг: SQLITE_BUSY → ErrDBLocked. ErrDiskFull для read не различается.
+func (s *Store) LoadUserCredentials(h Handle) (UserWithCredentials, error)
+
+// PersistLoginSession — write-метод. Контракт: см. slices/03-sessions-start.md.
+//
+// Внутри: INSERT INTO login_sessions (id, user_id, challenge, expires_at) VALUES (?, ?, ?, ?).
+//
+// Маппинг: SQLITE_BUSY → ErrDBLocked, SQLITE_FULL → ErrDiskFull.
+func (s *Store) PersistLoginSession(ls LoginSession) error
+```
+
+**Один объект, два метода (read + write).** По правилу Шага 6 «один режим работы» каждый метод — отдельный I/O-модуль (юнитами не покрывается, проверяется компонентным сценарием). Объединение в один объект — не нарушение правила: правило про методы, не про типы. Альтернатива — два объекта (`UserCredentialReader`, `LoginSessionWriter`) — даёт больше типов без выигрыша в инкапсуляции (всё равно одна `*sql.DB` под капотом). Берём один `Store`.
+
+> **Технический долг S1/S2.** В реализованных слайсах 1 и 2 в `Deps` лежит сырой `*sql.DB`, а I/O — пакетные функции (`persistRegistrationSession`, `loadRegistrationSession`, `finishRegistration`), не методы автономного объекта. Это нарушение Шага 6 и `feedback_io_autonomous_store`, которое не правится в этой ветке (правило «связанные правки — одна ветка»: ветка дизайна S3 не должна расширяться на рефакторинг реализаций S1/S2). Долг фиксируется отдельным тикетом и закрывается одним PR — либо вместе с дизайном S4 (когда S4 потребует свой `Store`), либо отдельной refactor-сессией оператора.
 
