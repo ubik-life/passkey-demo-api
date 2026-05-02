@@ -91,7 +91,7 @@ func (w *World) cleanupDB() {
 		return
 	}
 	defer db.Close()
-	for _, table := range []string{"refresh_tokens", "credentials", "users", "registration_sessions"} {
+	for _, table := range []string{"refresh_tokens", "login_sessions", "credentials", "users", "registration_sessions"} {
 		_, _ = db.Exec("DELETE FROM " + table)
 	}
 }

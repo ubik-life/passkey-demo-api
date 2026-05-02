@@ -154,3 +154,13 @@ func buildResponse(view BuildTokenPairView) TokenPair {
 		RefreshToken: view.Refresh.Plaintext(),
 	}
 }
+
+// GenerateTokenPair — публичная обёртка над generateTokenPair для импорта S4.
+func GenerateTokenPair(input GenerateTokenPairInput, signer ed25519.PrivateKey, jwtCfg JWTConfig) (IssuedTokenPair, error) {
+	return generateTokenPair(input, signer, jwtCfg)
+}
+
+// BuildResponse — публичная обёртка над buildResponse для импорта S4.
+func BuildResponse(view BuildTokenPairView) TokenPair {
+	return buildResponse(view)
+}
