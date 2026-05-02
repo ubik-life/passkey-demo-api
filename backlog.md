@@ -125,7 +125,7 @@ component-tests/
 | Slice | Эндпоинт | Failure-режим | Статус |
 |---|---|---|---|
 | S1 — registrations-start | `POST /v1/registrations` | — | done (PR #17) |
-| S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | todo (дизайн) |
+| S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | done (PR #XX) |
 | S3 — sessions-start | `POST /v1/sessions` | — | todo (дизайн) |
 | S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | todo (дизайн) |
 | S5 — sessions-logout | `DELETE /v1/sessions/current` | — | todo (дизайн) |

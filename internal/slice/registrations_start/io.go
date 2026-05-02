@@ -9,15 +9,21 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-func persistRegistrationSession(db *sql.DB, s RegistrationSession) error {
-	challenge := s.Challenge().Bytes()
-	_, err := db.ExecContext(
+// Store — автономный модуль работы с БД. Инкапсулирует *sql.DB;
+// головной модуль знает только методы, не зависимости.
+type Store struct{ db *sql.DB }
+
+func NewStore(db *sql.DB) Store { return Store{db: db} }
+
+func (s Store) Save(session RegistrationSession) error {
+	challenge := session.Challenge().Bytes()
+	_, err := s.db.ExecContext(
 		context.Background(),
 		`INSERT INTO registration_sessions (id, handle, challenge, expires_at) VALUES (?, ?, ?, ?)`,
-		s.ID().String(),
-		s.Handle().Value(),
+		session.ID().String(),
+		session.Handle().Value(),
 		challenge[:],
-		s.ExpiresAt().Unix(),
+		session.ExpiresAt().Unix(),
 	)
 	if err != nil {
 		return mapSQLiteErr(err)

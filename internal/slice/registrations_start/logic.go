@@ -10,8 +10,9 @@ import (
 
 // RPConfig — конфигурация Relying Party для WebAuthn-options.
 type RPConfig struct {
-	Name string
-	ID   string
+	Name   string
+	ID     string
+	Origin string // ожидаемый origin для clientDataJSON (S2+)
 }
 
 // RegistrationStartRequest — невалидированный вход из HTTP-адаптера.
