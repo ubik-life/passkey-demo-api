@@ -53,16 +53,12 @@ devlog/
 | README.md | done |
 | Шаблон компонентных тестов (Шаг 2.0) | done |
 | Gherkin-сценарии (Шаг 2) | done |
-| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1/S2 реализованы, S3/S4 спроектированы (ожидают реализацию) |
+| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1/S2/S3 реализованы, техдолг S1/S2 → Store закрыт (PR #27), S4 спроектирован (PR #28), ожидает реализации |
 | CI на PR (Шаг 4) | todo |
 
 ## Следующий шаг
 
-Дизайн slice'а S4 (`sessions-finish` — `POST /v1/sessions/{id}/assertion`, фаза 2 входа, верификация assertion, обновление signCount, выдача JWT-пары, режим `db_locked`) — готов в ветке `feat/design-sessions-finish` (ожидает аппрува оператора и мержа). Дальше:
-1. Реализация S3 sonnet'ом (ветка `feat/slice-sessions-start`).
-2. Закрытие техдолга S1/S2 → Store-объект (ветка `refactor/s1-s2-store`).
-3. Реализация S4 sonnet'ом (ветка `feat/slice-sessions-finish`) — после п.1 и п.2.
-4. Дизайн S5 (`sessions-logout`) — opus на скилле `program-design`.
+Реализация S4 sonnet'ом (`sessions-finish` — `POST /v1/sessions/{id}/assertion`, фаза 2 входа, верификация assertion, обновление signCount, выдача JWT-пары, режим `db_locked`). Карточка `docs/design/passkey-demo/slices/04-sessions-finish.md`, тикет в `docs/design/passkey-demo/backlog.md`. Ветка `feat/slice-sessions-finish`. После мержа S4 — дизайн S5 (`sessions-logout`) opus'ом на скилле `program-design`.
 
 ## Принятые решения
 
