@@ -99,3 +99,23 @@
 **Стоимость сессии:** $21.65. Время API: 30m 9s, wall: 47m 52s. Изменений: +1084 / −153 строк.
 Токены claude-opus-4-7: 263 input, 128.8k output, 31.2m cache read, 449.4k cache write ($21.65).
 Токены claude-haiku-4-5: 481 input, 19 output, 0 cache read, 0 cache write ($0.0006).
+
+## S3 — реализация sessions-start (2026-05-02)
+
+**Промпты:**
+
+1. «прочитай бэклог, приступи к реализации S3 пуш только после моего ревью»
+2. «продолжай» (после прерывания пользователем в середине работы)
+3. «покажи код где роутятся пути?» / «сам код покажи чтобы я понял как это работает в го»
+
+**Что сделано:** Реализован slice S3 (`POST /v1/sessions`) по карточке `slices/03-sessions-start.md`. Ветка `feat/slice-sessions-start`, один коммит, пуш ожидает ревью.
+
+Аддитивные расширения: `GenerateChallenge()` экспортирован в S1; `UserIDFromString`, `UserFromRow`, `CredentialFromRow` добавлены в S2. Новый пакет `internal/slice/sessions_start/` — 7 файлов (errors, domain, logic, io, head, handler, register) + 2 тест-файла. Миграция `0005_login_sessions.sql`. Подключение в `wire.go` и `main.go`.
+
+**Решений по ходу не было:** карточка S3 была полной и однозначной. Агент читал карточку → реализовывал точно по контрактам → тесты зелёные с первого запуска.
+
+**Тесты:** 6 юнит-тестов по формуле (2 `NewSessionStartCommand` + 1 `generateLoginSessionID` + 1 `NewLoginSession` + 1 `buildRequestOptions` + 1 `buildResponse`). `go test ./...` — 3 пакета зелёные. `go build ./cmd/api` — чистый.
+
+**Стоимость сессии:** $2.08. Время API: 7m 1s, wall: 17m 10s. Изменений: +647 / −1 строк.
+Токены claude-sonnet-4-6: 60 input, 25.2k output, 4.4m cache read, 99.7k cache write ($2.08).
+Токены claude-haiku-4-5: 365 input, 17 output, 0 cache read, 0 cache write ($0.0004).
