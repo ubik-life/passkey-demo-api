@@ -121,3 +121,18 @@
 **Стоимость сессии:** $3.64. Время API: 12m 19s, wall: 37m 13s. Изменений: +694 / −7 строк.
 Токены claude-sonnet-4-6: 119 input, 39.2k output, 8.4m cache read, 139.7k cache write ($3.64).
 Токены claude-haiku-4-5: 365 input, 17 output, 0 cache read, 0 cache write ($0.0004).
+
+## Рефакторинг S1/S2 — переименование методов Store (2026-05-02)
+
+**Что сделано:** Приведены имена методов `Store` к контракту дизайн-карточек S1/S2. Ветка `refactor/s1-s2-store`, PR ожидает аппрув.
+
+- S1: `Store.Save` → `Store.PersistRegistrationSession`
+- S2: `Store.LoadSession` → `Store.LoadRegistrationSession`, `Store.Finish` → `Store.FinishRegistration`
+
+Структурных изменений нет — `Store` уже существовал в обоих слайсах, `*sql.DB` уже был инкапсулирован. Только переименование (4 файла, 6 строк).
+
+**Тесты:** `go test ./...` зелёный. Компонентные: 4 passed / 5 failed — идентично состоянию до рефакторинга. Регрессий нет.
+
+**Стоимость сессии (инкрементально):** ~$1.15. Накопленно за сессию (S3 + рефакторинг): $4.79, API: 14m 23s, wall: 43m 10s. Изменений: +705 / −16 строк суммарно.
+Токены claude-sonnet-4-6: 147 input, 44.3k output, 11.9m cache read, 152.3k cache write ($4.79 накопленно).
+Токены claude-haiku-4-5: 365 input, 17 output, 0 cache read, 0 cache write ($0.0004).
