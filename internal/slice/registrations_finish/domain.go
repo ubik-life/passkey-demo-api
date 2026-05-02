@@ -2,6 +2,7 @@ package registrations_finish
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -162,4 +163,58 @@ type FinishRegistrationInput struct {
 	RefreshTokenHash string
 	RefreshExpiresAt time.Time
 	RegistrationID   s1.RegistrationID
+}
+
+// UserIDFromString восстанавливает UserID из UUID-строки.
+func UserIDFromString(s string) (UserID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return UserID{}, fmt.Errorf("userID: %w", err)
+	}
+	return UserID{value: id}, nil
+}
+
+// UserFromRow восстанавливает User из строки БД (id, handle, created_at).
+func UserFromRow(rowID string, rowHandle string, rowCreatedAtUnix int64) (User, error) {
+	userID, err := UserIDFromString(rowID)
+	if err != nil {
+		return User{}, fmt.Errorf("user from row: %w", err)
+	}
+	handle, err := s1.NewHandle(rowHandle)
+	if err != nil {
+		return User{}, fmt.Errorf("user from row: %w", err)
+	}
+	return User{
+		id:        userID,
+		handle:    handle,
+		createdAt: time.Unix(rowCreatedAtUnix, 0).UTC(),
+	}, nil
+}
+
+// CredentialFromRow восстанавливает Credential из строки БД.
+// transports — CSV-строка ("usb,nfc"), может быть пустой.
+func CredentialFromRow(
+	rowCredentialID []byte,
+	rowUserID string,
+	rowPublicKey []byte,
+	rowSignCount uint32,
+	rowTransports string,
+	rowCreatedAtUnix int64,
+) (Credential, error) {
+	userID, err := UserIDFromString(rowUserID)
+	if err != nil {
+		return Credential{}, fmt.Errorf("credential from row: %w", err)
+	}
+	var transports []string
+	if rowTransports != "" {
+		transports = strings.Split(rowTransports, ",")
+	}
+	return Credential{
+		credentialID: rowCredentialID,
+		userID:       userID,
+		publicKey:    rowPublicKey,
+		signCount:    rowSignCount,
+		transports:   transports,
+		createdAt:    time.Unix(rowCreatedAtUnix, 0).UTC(),
+	}, nil
 }

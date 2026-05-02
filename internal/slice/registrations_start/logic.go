@@ -66,6 +66,9 @@ func generateChallenge() (Challenge, error) {
 	return c, nil
 }
 
+// GenerateChallenge — публичная обёртка для реиспользования в S3/S4.
+func GenerateChallenge() (Challenge, error) { return generateChallenge() }
+
 func generateRegistrationID() RegistrationID {
 	return RegistrationID{value: uuid.New()}
 }
