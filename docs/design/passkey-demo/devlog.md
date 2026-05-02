@@ -114,8 +114,10 @@
 
 **Решений по ходу не было:** карточка S3 была полной и однозначной. Агент читал карточку → реализовывал точно по контрактам → тесты зелёные с первого запуска.
 
-**Тесты:** 6 юнит-тестов по формуле (2 `NewSessionStartCommand` + 1 `generateLoginSessionID` + 1 `NewLoginSession` + 1 `buildRequestOptions` + 1 `buildResponse`). `go test ./...` — 3 пакета зелёные. `go build ./cmd/api` — чистый.
+**Тесты:** 6 юнит-тестов по формуле (2 `NewSessionStartCommand` + 1 `generateLoginSessionID` + 1 `NewLoginSession` + 1 `buildRequestOptions` + 1 `buildResponse`). `go test ./...` — 3 пакета зелёные. Компонентные: `Создание challenge входа` зелёный, остальные красные ожидаемо (S4–S6 не реализованы). PR #26 смержен в main.
 
-**Стоимость сессии:** $2.08. Время API: 7m 1s, wall: 17m 10s. Изменений: +647 / −1 строк.
-Токены claude-sonnet-4-6: 60 input, 25.2k output, 4.4m cache read, 99.7k cache write ($2.08).
+**Правки по ходу сессии:** агент не прогнал компонентные тесты до отчёта о готовности — поймал оператор. Исправлено: скилл `program-implementation` Шаг 4 уточнён (точная команда + критерий зелёного), правило добавлено в память агента.
+
+**Стоимость сессии:** $3.64. Время API: 12m 19s, wall: 37m 13s. Изменений: +694 / −7 строк.
+Токены claude-sonnet-4-6: 119 input, 39.2k output, 8.4m cache read, 139.7k cache write ($3.64).
 Токены claude-haiku-4-5: 365 input, 17 output, 0 cache read, 0 cache write ($0.0004).
