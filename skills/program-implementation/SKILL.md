@@ -127,6 +127,34 @@ git checkout -b feat/slice-<name>
 4. Модули I/O slice'а (по одному на каждую внешнюю операцию: чтение БД,
    запись БД, публикация в брокер, вызов внешнего REST). Их может быть
    несколько — это нормально, см. Шаг 6 скилла opus.
+
+   **Правило автономного Store.** Каждый I/O-модуль оборачивается в
+   `Store`-объект, который **инкапсулирует свои зависимости** (например
+   `*sql.DB`). Головной модуль знает только методы Store (API), не его
+   зависимости. Форма реализации:
+
+   ```go
+   // io.go
+   type Store struct{ db *sql.DB }
+   func NewStore(db *sql.DB) Store { return Store{db: db} }
+   func (s Store) Save(msg DomainMessage) error { ... }
+
+   // register.go — Deps содержит Store, а не *sql.DB
+   type Deps struct {
+       Store  Store
+       Clock  clock.Clock
+       // ...
+   }
+
+   // wire.go или NewDeps — *sql.DB скрывается здесь
+   func NewDeps(db *sql.DB, ...) Deps {
+       return Deps{Store: NewStore(db), ...}
+   }
+   ```
+
+   Признак нарушения: `deps.DB` в `head.go` или `import "database/sql"`
+   в `head.go`. Если видишь — исправить до коммита.
+
 5. **Головной модуль slice'а** — оркестратор: вызывает конструктор
    доменной команды (получает либо команду, либо ошибку), описывает
    пайп исполнения, вызывает модули логики и I/O.

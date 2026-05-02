@@ -10,8 +10,9 @@ import (
 )
 
 // Deps — зависимости слайса. Инжектируются wire.go.
+// Store автономен: head-модуль не знает про *sql.DB.
 type Deps struct {
-	DB           *sql.DB
+	Store        Store
 	Clock        clock.Clock
 	Logger       *slog.Logger
 	RP           RPConfig
@@ -21,7 +22,7 @@ type Deps struct {
 // NewDeps собирает Deps из общих зависимостей приложения.
 func NewDeps(db *sql.DB, clk clock.Clock, log *slog.Logger, rp RPConfig, ttl time.Duration) Deps {
 	return Deps{
-		DB:           db,
+		Store:        NewStore(db),
 		Clock:        clk,
 		Logger:       log,
 		RP:           rp,
