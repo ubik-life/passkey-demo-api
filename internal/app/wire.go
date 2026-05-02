@@ -10,6 +10,7 @@ import (
 	"github.com/ubik-life/passkey-demo-api/internal/clock"
 	rf "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_finish"
 	s1 "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
+	ss "github.com/ubik-life/passkey-demo-api/internal/slice/sessions_start"
 )
 
 // Signer — пара Ed25519 ключей, генерируется при старте процесса.
@@ -31,6 +32,7 @@ func GenerateSigner() (Signer, error) {
 type WiredDeps struct {
 	RegistrationsStart  s1.Deps
 	RegistrationsFinish rf.Deps
+	SessionsStart       ss.Deps
 }
 
 // Build собирает зависимости для всех слайсов.
@@ -44,6 +46,13 @@ func Build(cfg AppConfig, db *sql.DB, log *slog.Logger, clk clock.Clock, signer 
 			RP:     cfg.RP,
 			JWT:    cfg.JWT,
 			Signer: signer.Private,
+		},
+		SessionsStart: ss.Deps{
+			Store:        ss.NewStore(db),
+			Clock:        clk,
+			Logger:       log.With("slice", "sessions-start"),
+			RP:           cfg.RP,
+			ChallengeTTL: cfg.ChallengeTTL,
 		},
 	}
 }
