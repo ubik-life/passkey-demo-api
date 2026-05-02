@@ -126,7 +126,7 @@ component-tests/
 |---|---|---|---|
 | S1 — registrations-start | `POST /v1/registrations` | — | done (PR #17) |
 | S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | done (PR #XX) |
-| S3 — sessions-start | `POST /v1/sessions` | — | in progress (ветка feat/slice-sessions-start) |
+| S3 — sessions-start | `POST /v1/sessions` | — | in review (PR #26) |
 | S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | todo (дизайн) |
 | S5 — sessions-logout | `DELETE /v1/sessions/current` | — | todo (дизайн) |
 | S6 — users-me | `GET /v1/users/me` | — | todo (дизайн) |
