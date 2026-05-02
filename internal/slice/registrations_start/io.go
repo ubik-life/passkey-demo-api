@@ -15,7 +15,7 @@ type Store struct{ db *sql.DB }
 
 func NewStore(db *sql.DB) Store { return Store{db: db} }
 
-func (s Store) Save(session RegistrationSession) error {
+func (s Store) PersistRegistrationSession(session RegistrationSession) error {
 	challenge := session.Challenge().Bytes()
 	_, err := s.db.ExecContext(
 		context.Background(),

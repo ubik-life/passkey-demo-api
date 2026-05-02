@@ -17,7 +17,7 @@ type Store struct{ db *sql.DB }
 
 func NewStore(db *sql.DB) Store { return Store{db: db} }
 
-func (s Store) LoadSession(id s1.RegistrationID) (s1.RegistrationSession, error) {
+func (s Store) LoadRegistrationSession(id s1.RegistrationID) (s1.RegistrationSession, error) {
 	var (
 		rowID        string
 		rowHandle    string
@@ -42,7 +42,7 @@ func (s Store) LoadSession(id s1.RegistrationID) (s1.RegistrationSession, error)
 	return session, nil
 }
 
-func (s Store) Finish(input FinishRegistrationInput) error {
+func (s Store) FinishRegistration(input FinishRegistrationInput) error {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return mapSQLiteErrWrite(err)

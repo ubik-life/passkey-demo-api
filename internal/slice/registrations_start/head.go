@@ -24,7 +24,7 @@ func ProcessRegistrationStart(req RegistrationStartRequest, deps Deps) (Registra
 	}
 	session := NewRegistrationSession(input)
 
-	if err := deps.Store.Save(session); err != nil {
+	if err := deps.Store.PersistRegistrationSession(session); err != nil {
 		return RegistrationStartResponse{}, fmt.Errorf("persist: %w", err)
 	}
 
