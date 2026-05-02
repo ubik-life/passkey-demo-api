@@ -96,13 +96,18 @@ main():
     db, err := db.Open(cfg.DBPath)       // открыть пул, применить миграции 0001-0004
     defer db.Close()
 
-    deps := wire.Build(cfg, db, log, clk, signer, rand.Reader)
+    deps := wire.Build(cfg, db, log, clk, signer)
+    // wire.Build внутри создаёт *Store для каждого слайса и подкладывает в Deps:
+    //   deps.RegistrationsStart.Store = registrations_start.NewStore(db)
+    //   deps.RegistrationsFinish.Store = registrations_finish.NewStore(db)
+    //   deps.SessionsStart.Store = sessions_start.NewStore(db)
 
     mux := chi.NewRouter()
     registrationsStart.Register(mux, deps.RegistrationsStart)
     registrationsFinish.Register(mux, deps.RegistrationsFinish)   // [S2]
+    sessionsStart.Register(mux, deps.SessionsStart)               // [S3]
     // в следующих итерациях:
-    // sessionsStart.Register(mux, deps.SessionsStart)
+    // sessionsFinish.Register(mux, deps.SessionsFinish)
     // ...
 
     srv := &http.Server{ Addr: cfg.ListenAddr, Handler: mux }
@@ -124,8 +129,10 @@ func Register(mux chi.Router, deps Deps) {
 }
 
 // Deps — зависимости слайса. Инжектируются wire.go.
+// Применение Шага 6 скилла + feedback_io_autonomous_store: БД-зависимость
+// инкапсулирована в *Store, головной модуль её не видит. Сырого *sql.DB здесь нет.
 type Deps struct {
-    DB           *sql.DB
+    Store        *Store          // автономный I/O-объект слайса 1, инкапсулирующий *sql.DB
     Clock        clock.Clock
     Logger       *slog.Logger
     RP           RPConfig
@@ -133,7 +140,9 @@ type Deps struct {
 }
 ```
 
-Wire берёт эти поля из `AppConfig` и общих зависимостей и собирает `Deps` для каждого слайса. Слайсы между собой `Deps` не делят (vertical slice — изоляция).
+Wire берёт эти поля из `AppConfig` и общих зависимостей и собирает `Deps` для каждого слайса. Слайсы между собой `Deps` не делят (vertical slice — изоляция). Каждый слайс имеет свой `Store`-объект (`registrations_start.Store`, `registrations_finish.Store`, `sessions_start.Store` — независимые типы, общий `*sql.DB` под капотом).
+
+> **Техдолг кода S1.** В реализации (`internal/slice/registrations_start/`, PR #17) `Deps.DB *sql.DB` хранится напрямую, `persistRegistrationSession` — пакетная функция. Дизайн отражает целевое состояние; рефакторинг кода — отдельный тикет.
 
 ## Подключение слайса 2 (S2)
 
@@ -147,18 +156,64 @@ func Register(mux chi.Router, deps Deps) {
 }
 
 // Deps — зависимости слайса 2.
+// Применение Шага 6 скилла + feedback_io_autonomous_store: БД-зависимость
+// инкапсулирована в *Store, головной модуль её не видит. Сырого *sql.DB здесь нет.
 type Deps struct {
-    DB       *sql.DB
+    Store    *Store                          // автономный I/O-объект слайса 2, инкапсулирующий *sql.DB
     Clock    clock.Clock
     Logger   *slog.Logger
-    RP       registrations_start.RPConfig  // импорт из S1; в S2 используется поле Origin
+    RP       registrations_start.RPConfig    // импорт из S1; в S2 используется поле Origin
     JWT      JWTConfig
-    Signer   ed25519.PrivateKey            // приватный ключ Ed25519, генерится при старте
-    Rand     io.Reader                     // источник случайности (crypto/rand.Reader в проде)
+    Signer   ed25519.PrivateKey              // приватный ключ Ed25519, генерится при старте
 }
 ```
 
-`Rand` — отдельный dep вместо неявного `crypto/rand`, чтобы юнит-тесты `generateTokenPair` могли подсунуть детерминированный генератор и проверить совпадение hash refresh-токена.
+> **Техдолг кода S2.** В реализации (`internal/slice/registrations_finish/`, PR #21) `Deps.DB *sql.DB` хранится напрямую, `loadRegistrationSession`/`finishRegistration` — пакетные функции. Дизайн отражает целевое состояние; рефакторинг кода — отдельный тикет.
+
+> **Замечание о `Rand` (post-S2 рефакторинг).** По итогам аудита скиллов 2026-05-02 (см. `devlog.md`) поле `Rand io.Reader` из `Deps` слайса 2 было удалено: оно жило только ради тестирования головного модуля, а тот юнитами не покрывается. `crypto/rand.Reader` теперь захардкожен внутри `generateTokenPair`. В целевом дизайне выше его тоже нет.
+
+## Подключение слайса 3 (S3)
+
+```go
+// internal/slice/sessions_start/register.go
+package sessions_start
+
+func Register(mux chi.Router, deps Deps) {
+    h := newHTTPHandler(deps)
+    mux.Post("/v1/sessions", h.ServeHTTP)
+}
+
+// Deps — зависимости слайса 3.
+// Применение Шага 6 скилла + feedback_io_autonomous_store: БД-зависимость
+// инкапсулирована в *Store, головной модуль её не видит. Сырого *sql.DB здесь нет.
+type Deps struct {
+    Store        *Store                         // автономный I/O-объект слайса 3, инкапсулирующий *sql.DB
+    Clock        clock.Clock
+    Logger       *slog.Logger
+    RP           registrations_start.RPConfig   // импорт из S1; в S3 используется только поле ID
+    ChallengeTTL time.Duration
+}
+```
+
+В `wire.go` инфраструктурный модуль создаёт `Store` и пробрасывает в `Deps`:
+
+```go
+// internal/app/wire.go (фрагмент для S3)
+sessionsStartStore := sessions_start.NewStore(db)  // db *sql.DB — общий пул из db.Open
+deps.SessionsStart = sessions_start.Deps{
+    Store:        sessionsStartStore,
+    Clock:        clk,
+    Logger:       log.With("slice", "sessions-start"),
+    RP:           cfg.RP,
+    ChallengeTTL: cfg.ChallengeTTL,
+}
+```
+
+В S3 не нужны `JWT`, `Signer`, `Origin`: фаза 1 входа не выдаёт токены и не верифицирует attestation/assertion. `RP.ID` идёт в `options.rpId`. `ChallengeTTL` — тот же конфиг, что у S1; повторно использовать его на login-сессию допустимо, потому что природа TTL та же — окно, в которое клиент должен завершить фазу 2.
+
+> **Технический долг S1/S2.** В реализованных Deps слайсов 1 и 2 лежит сырой `*sql.DB` (см. `internal/slice/registrations_start/`, `internal/slice/registrations_finish/`) — нарушение Шага 6 и `feedback_io_autonomous_store`. В этой ветке (`feat/design-sessions-start`) долг не правится, чтобы не расширять scope. Закроется отдельным PR — рефакторинг S1/S2 на `Store`-объекты, либо вместе с дизайном S4 (когда S4 потребует свой `Store`).
+
+> **Открытый вопрос для S4 (фиксирую сейчас, чтобы не потерять).** Когда S4 будет проектироваться, понадобится решить: (а) хватит ли одного `PASSKEY_CHALLENGE_TTL` на оба сценария (регистрация + вход), или (б) нужен отдельный `PASSKEY_LOGIN_CHALLENGE_TTL`. Пока — (а), `5m` подходит обоим. Если разные SLA понадобятся, добавим в инфраструктурный модуль env с дефолтом, равным `PASSKEY_CHALLENGE_TTL`, и расширим `AppConfig`. Изменение аддитивное.
 
 ## Миграции
 
@@ -167,7 +222,8 @@ internal/db/migrations/
 ├── 0001_registration_sessions.sql   [S1]
 ├── 0002_users.sql                    [S2]
 ├── 0003_credentials.sql              [S2]
-└── 0004_refresh_tokens.sql           [S2]
+├── 0004_refresh_tokens.sql           [S2]
+└── 0005_login_sessions.sql           [S3]
 ```
 
 Миграции применяются на старте `db.Open` через `goose` (см. `AGENTS.md §15`). Один файл — одна таблица + связанные индексы; легче читать историю и откатывать частично.
@@ -242,9 +298,30 @@ DROP TABLE IF EXISTS refresh_tokens;
 
 `revoked_at` — для S5 (logout). На S2 строки создаются с `revoked_at = NULL`. Валидация в S5/S6: `expires_at > now AND revoked_at IS NULL`.
 
+### `0005_login_sessions.sql` (S3)
+
+```sql
+-- +goose Up
+CREATE TABLE login_sessions (
+    id          TEXT    PRIMARY KEY,                                -- UUID v4 string
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    challenge   BLOB    NOT NULL,                                    -- 32 bytes
+    expires_at  INTEGER NOT NULL                                     -- unix seconds
+);
+CREATE INDEX idx_login_sessions_user_id    ON login_sessions(user_id);
+CREATE INDEX idx_login_sessions_expires_at ON login_sessions(expires_at);
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_login_sessions_expires_at;
+DROP INDEX IF EXISTS idx_login_sessions_user_id;
+DROP TABLE IF EXISTS login_sessions;
+```
+
+Хранится `user_id` (FK на `users.id`), не `handle`: `user_id` стабилен, использует индекс PK, и в S4 даёт прямой путь `login_session → user_id → credentials` без повторного поиска по handle. `ON DELETE CASCADE` — на случай удаления пользователя в будущем (на S3-S4 удалений `users` нет, но цена нулевая).
+
 ### Будущие миграции
 
-`login_sessions` (challenge'и фазы 1 входа) — слайс 3. Добавится отдельным файлом `0005_login_sessions.sql` в его итерации.
+`login_sessions` создаётся в S3. Дополнительные миграции возможны в S5 (logout — может понадобиться индекс `revoked_at` на `refresh_tokens`, но отложим до проектирования S5).
 
 ## Health-эндпоинт
 

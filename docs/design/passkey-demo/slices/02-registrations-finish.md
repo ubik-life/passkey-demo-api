@@ -51,18 +51,22 @@
     ├── (1) NewRegistrationFinishCommand(req)              → RegistrationFinishCommand
     │       ├── RegistrationIDFromString(raw)              → RegistrationID    [рехидратор S1]
     │       └── parseAttestation(body)                     → ParsedAttestation [логика-лист; deps: protocol]
-    ├── (2) loadRegistrationSession(cmd.RegID)             → RegistrationSession  [I/O — SQLite read; dep: db]
+    ├── (2) Store.LoadRegistrationSession(cmd.RegID)       → RegistrationSession  [I/O-метод — SQLite read]
     ├── (3) NewFreshRegistrationSession(input)             → FreshRegistrationSession [конструктор подтипа]
     ├── (4) verifyAttestation(input)                       → VerifiedCredential [логика; deps: rpConfig]
     ├── (5) NewUser(input)                                 → User              [конструктор-сборщик]
     │       └── generateUserID()                           → UserID            [логика-лист]
     ├── (6) NewCredential(input)                           → Credential        [конструктор-сборщик]
     ├── (7) generateTokenPair(input)                       → IssuedTokenPair   [логика; deps: signer, jwtCfg, rand]
-    ├── (8) finishRegistration(input)                      → error             [I/O — SQLite write tx; dep: db]
+    ├── (8) Store.FinishRegistration(input)                → error             [I/O-метод — SQLite write tx]
     └── (9) buildResponse(view)                            → TokenPair         [логика]
 ```
 
-Каждый узел — **один data-аргумент** (Шаг 3 скилла). Зависимости (`db`, `rpConfig`, `signer`, `jwtCfg`, `clock`, `rand`) вынесены через `Deps` и не считаются стрелками графа.
+Каждый узел — **один data-аргумент** (Шаг 3 скилла). Зависимости (`Store`, `rpConfig`, `signer`, `jwtCfg`, `clock`, `rand`) вынесены через `Deps` и не считаются стрелками графа.
+
+**Автономный I/O-объект `Store` (Шаг 6 скилла).** Узлы (2) и (8) — методы объекта `Store` слайса 2, инкапсулирующего `*sql.DB`. Головной модуль `ProcessRegistrationFinish` знает только API объекта (методы `LoadRegistrationSession`, `FinishRegistration`), но не его внутреннюю зависимость. В `Deps` слайса — поле типа `*Store`, **не** сырой `*sql.DB`. См. `messages.md` → секция «I/O-объект слайса 2» и `infrastructure.md` → «Подключение слайса 2».
+
+> **Техдолг кода S2.** Карточка дизайна отражает целевое состояние. Реализация в коде (`internal/slice/registrations_finish/`) пока держит `*sql.DB` напрямую в `Deps`, а `loadRegistrationSession`/`finishRegistration` — пакетные функции (см. PR #21). Рефакторинг кода под `Store`-объект — отдельный тикет в `backlog.md` (root), закроется одним PR с аналогичным рефакторингом S1.
 
 Применение **подправила «подтип, не guard»** (Шаг 3 скилла): инвариант «сессия не истекла» оформлен как конструктор подтипа `NewFreshRegistrationSession` (узел 3), не как guard `checkSessionFresh(...) -> ()`. Дальнейшие шаги (4, 5) принимают `FreshRegistrationSession`, не сырой `RegistrationSession` — система типов гарантирует, что верификация и создание пользователя могут произойти только из non-expired сессии.
 
@@ -73,7 +77,7 @@ ProcessRegistrationFinish(req: RegistrationFinishRequest, deps: Deps)
     -> (TokenPair, error):
 
     | NewRegistrationFinishCommand(req)                              -> RegistrationFinishCommand
-    | loadRegistrationSession(cmd.RegID())                            -> RegistrationSession   [dep: deps.db]
+    | deps.Store.LoadRegistrationSession(cmd.RegID())                -> RegistrationSession
     | input := NewFreshSessionInput{ Session: session, Now: deps.clock.Now() }
     | NewFreshRegistrationSession(input)                              -> FreshRegistrationSession
     | verifyInput := AttestationVerification{ Fresh: fresh, Parsed: cmd.Parsed() }
@@ -91,7 +95,7 @@ ProcessRegistrationFinish(req: RegistrationFinishRequest, deps: Deps)
                                                RefreshTokenHash: issued.Refresh.Hash(),
                                                RefreshExpiresAt: issued.Refresh.ExpiresAt(),
                                                RegistrationID: fresh.ID() }
-    | finishRegistration(finishInput)                                 -> error                  [dep: deps.db]
+    | deps.Store.FinishRegistration(finishInput)                     -> error
     | view := BuildTokenPairView{ Access: issued.Access, Refresh: issued.Refresh }
     | buildResponse(view)                                              -> TokenPair
 ```
@@ -122,12 +126,12 @@ ProcessRegistrationFinish(req: RegistrationFinishRequest, deps: Deps)
   - Success: команда с валидным `RegistrationID` и распарсенным `ParsedAttestation`.
   - Failure: `ErrInvalidRegID` (UUID не парсится) или `ErrAttestationParse` (тело не парсится), обёрнутые через `fmt.Errorf("...: %w", err)`.
 
-### `loadRegistrationSession`
+### `Store.LoadRegistrationSession` (метод I/O-объекта)
 
-- **Сигнатура:** `loadRegistrationSession(id RegistrationID) -> (RegistrationSession, error)`
+- **Сигнатура:** `(s *Store) LoadRegistrationSession(id RegistrationID) -> (RegistrationSession, error)`
 - **Input (data):** `id RegistrationID`
-- **Dependencies (deps):** `*sql.DB`
-- **Что делает:** SELECT id, handle, challenge, expires_at FROM registration_sessions WHERE id = ?. Если строка найдена — рехидрирует через `RegistrationSessionFromRow`. Если нет — `ErrSessionNotFound`.
+- **Dependencies (deps):** — (зависимость `*sql.DB` инкапсулирована внутри `Store`; головной модуль её не видит)
+- **Что делает:** SELECT id, handle, challenge, expires_at FROM registration_sessions WHERE id = ?. Если строка найдена — рехидрирует через `RegistrationSessionFromRow` (S1). Если нет — `ErrSessionNotFound`.
 - **Антецедент:** миграция `0001` применена; `id` валиден.
 - **Консеквент:**
   - Success: `RegistrationSession`, восстановленная из БД.
@@ -195,11 +199,11 @@ ProcessRegistrationFinish(req: RegistrationFinishRequest, deps: Deps)
   - Success: `IssuedTokenPair { Access: AccessToken{ value, expiresAt }, Refresh: IssuedRefreshToken{ plaintext, hash, expiresAt } }`.
   - Failure: catastrophic — ошибка `rand.Read` или `signer.Sign` (теоретическая; обрабатываем как 500).
 
-### `finishRegistration`
+### `Store.FinishRegistration` (метод I/O-объекта)
 
-- **Сигнатура:** `finishRegistration(input FinishRegistrationInput) -> error`
+- **Сигнатура:** `(s *Store) FinishRegistration(input FinishRegistrationInput) -> error`
 - **Input (data):** `input FinishRegistrationInput { User, Credential, RefreshTokenHash, RefreshExpiresAt, RegistrationID }`
-- **Dependencies (deps):** `*sql.DB`
+- **Dependencies (deps):** — (зависимость `*sql.DB` инкапсулирована внутри `Store`; головной модуль её не видит)
 - **Что делает:** одна транзакция:
   ```
   BEGIN
@@ -263,7 +267,7 @@ ProcessRegistrationFinish(req: RegistrationFinishRequest, deps: Deps)
 | Завершение регистрации                            | `Тогда ответ 200`                                    | Узлы (1)–(9) Success-путь → ингресс-адаптер: `200 OK` + JSON-сериализация `TokenPair`         |
 | Завершение регистрации                            | `И ответ содержит непустое JSON-поле access_token`   | (7) `generateTokenPair` (поле `Access.Value()`) → (9) `buildResponse` → ингресс-адаптер       |
 | Завершение регистрации                            | `И ответ содержит непустое JSON-поле refresh_token`  | (7) `generateTokenPair` (поле `Refresh.Plaintext()`) → (9) `buildResponse` → ингресс-адаптер  |
-| Диск переполнен при завершении регистрации        | `Тогда ответ 507`                                    | (8) `finishRegistration` Failure: `ErrDiskFull` → ингресс-адаптер: маппинг `ErrDiskFull` → 507 |
+| Диск переполнен при завершении регистрации        | `Тогда ответ 507`                                    | (8) `Store.FinishRegistration` Failure: `ErrDiskFull` → ингресс-адаптер: маппинг `ErrDiskFull` → 507 |
 | Диск переполнен при завершении регистрации        | `И ответ содержит JSON-поле code со значением "db_disk_full"` | ингресс-адаптер: маппинг `ErrDiskFull` → тело `{"code":"db_disk_full",...}`            |
 
 ### Чек-лист сверки 8.5
@@ -302,8 +306,8 @@ OpenAPI декларирует на этом эндпоинте также 503 `
 
 Что **не** в таблице (и почему):
 
-- `loadRegistrationSession` — I/O-модуль, труба. Юнитов нет. Success-путь проверяется компонентным сценарием **«Завершение регистрации»** (если read не дойдёт — фаза 2 не получит challenge, сценарий красный). Failure-ветки `ErrSessionNotFound`, `ErrDBLocked` — без отдельного компонентного сценария на этом эндпоинте; маппинг проверяется через адаптер.
-- `finishRegistration` — I/O-модуль. Success — happy-сценарий; Failure `ErrDiskFull` — компонентный сценарий «Диск переполнен при завершении регистрации». `ErrDBLocked`, `ErrHandleTaken` — без компонентного сценария на этом эндпоинте.
+- `Store.LoadRegistrationSession` — метод I/O-объекта, труба. Юнитов нет. Success-путь проверяется компонентным сценарием **«Завершение регистрации»** (если read не дойдёт — фаза 2 не получит challenge, сценарий красный). Failure-ветки `ErrSessionNotFound`, `ErrDBLocked` — без отдельного компонентного сценария на этом эндпоинте; маппинг проверяется через адаптер.
+- `Store.FinishRegistration` — метод I/O-объекта. Success — happy-сценарий; Failure `ErrDiskFull` — компонентный сценарий «Диск переполнен при завершении регистрации». `ErrDBLocked`, `ErrHandleTaken` — без компонентного сценария на этом эндпоинте.
 - **Ингресс-адаптер** — парсинг path/body и маппинг, юнитов нет. Реальные HTTP-вызовы в обоих компонентных сценариях.
 - **Головной модуль** `ProcessRegistrationFinish` — оркестратор-труба: линейный пайп из 9 шагов, ошибки I/O пробрасываются без трансформации. Юнит-тест над ним был бы интеграционным тестом. Корректность пайпа и все ветки ошибок доказываются компонентными сценариями через реальный HTTP-вход.
 
@@ -320,7 +324,10 @@ OpenAPI декларирует на этом эндпоинте также 503 `
 - [ ] ингресс-адаптер реализован: парсит path-параметр и тело в `RegistrationFinishRequest`, без бизнес-валидации.
 - [ ] конструкторы доменных структур (`NewRegistrationFinishCommand`, `NewFreshRegistrationSession`, `NewUser`, `NewCredential`) реализованы; невалидные данные → структура не создаётся.
 - [ ] модули логики (`parseAttestation`, `verifyAttestation`, `generateUserID`, `generateTokenPair`, `buildResponse`) реализованы, контракты выполнены.
-- [ ] модули I/O (`loadRegistrationSession`, `finishRegistration`) реализованы; `finishRegistration` — атомарная транзакция с откатом при любой ошибке; маппинг `SQLITE_BUSY` → `ErrDBLocked`, `SQLITE_FULL` → `ErrDiskFull`, UNIQUE на `users.handle` → `ErrHandleTaken`.
+- [ ] **I/O-объект `Store` реализован** как автономный объект, инкапсулирующий `*sql.DB`: тип `*Store`, конструктор `NewStore(db *sql.DB) *Store`, два метода:
+  - `(s *Store) LoadRegistrationSession(id RegistrationID) (RegistrationSession, error)`: SELECT по id, рехидратор `RegistrationSessionFromRow`; маппинг `sql.ErrNoRows → ErrSessionNotFound`, `SQLITE_BUSY → ErrDBLocked`.
+  - `(s *Store) FinishRegistration(input FinishRegistrationInput) error`: атомарная транзакция (4 операции), откат при любой ошибке; маппинг `SQLITE_CONSTRAINT_UNIQUE` на `users.handle → ErrHandleTaken`, `SQLITE_BUSY → ErrDBLocked`, `SQLITE_FULL → ErrDiskFull`.
+  - Голова `ProcessRegistrationFinish` обращается к БД **только через эти два метода**; `*sql.DB` нигде кроме `Store` не светится в slice-пакете.
 - [ ] головной модуль `ProcessRegistrationFinish` реализован: пайп из 9 шагов, ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`.
 - [ ] миграции `0002_users.sql`, `0003_credentials.sql`, `0004_refresh_tokens.sql` созданы по `infrastructure.md`.
 - [ ] инфраструктурный модуль расширен: `PASSKEY_RP_ORIGIN`, `PASSKEY_JWT_ACCESS_TTL`, `PASSKEY_JWT_REFRESH_TTL`, `PASSKEY_JWT_ISSUER` загружаются в `AppConfig`; Ed25519 keypair генерируется в `wire.go` при старте; `Deps` слайса 2 содержит `Signer`, `JWTConfig`.
