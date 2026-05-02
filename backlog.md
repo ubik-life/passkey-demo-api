@@ -126,8 +126,8 @@ component-tests/
 |---|---|---|---|
 | S1 — registrations-start | `POST /v1/registrations` | — | done (PR #17) |
 | S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | done (PR #XX) |
-| S3 — sessions-start | `POST /v1/sessions` | — | in progress (ветка feat/slice-sessions-start) |
-| S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | todo (дизайн) |
+| S3 — sessions-start | `POST /v1/sessions` | — | done (PR #26) |
+| S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | спроектирован, ожидает реализации (дизайн смержен PR #28) |
 | S5 — sessions-logout | `DELETE /v1/sessions/current` | — | todo (дизайн) |
 | S6 — users-me | `GET /v1/users/me` | — | todo (дизайн) |
 
@@ -139,25 +139,6 @@ S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 
 3. Devlog `docs/design/passkey-demo/devlog.md` дополняется блоком после каждого slice'а.
 
 **Definition of Done Шага 3:** все 6 slice'ов закрыты, все компонентные сценарии зелёные, `devlog/03-go-server.md` зафиксирован, CI на main зелёный.
-
-### Тикет S1/S2-refactor — Store-объект, убрать сырой `*sql.DB` из Deps
-
-**Зачем.** В коде S1 и S2 (PR #17, PR #21) `Deps` хранит `*sql.DB` напрямую, а I/O-операции (`persistRegistrationSession`, `loadRegistrationSession`, `finishRegistration`) — пакетные функции. Это нарушение Шага 6 скилла `program-design` («Правило автономного IO-объекта») и `feedback_io_autonomous_store` в памяти агента: головной модуль не должен видеть сырую БД-зависимость, она должна быть инкапсулирована в объекте `Store`. В S3 (дизайн уже принят) это правило соблюдено; карточки дизайна S1/S2 после правки 2026-05-02 тоже отражают целевое состояние, но **код S1/S2 ещё не обновлён**.
-
-Долг не правился в ветке `feat/design-sessions-start` по правилу «связанные правки — одна ветка»: ветка дизайна S3 не должна расширяться на рефакторинг реализаций S1/S2.
-
-**Когда делать.** До дизайна S4 — иначе sonnet, реализующий S4, увидит расхождение между карточками S1/S2 (новый стиль) и кодом (старый стиль). Лучший момент: одной refactor-сессией оператора **сразу после мержа S3-дизайна**.
-
-**Что сделать (один PR на оба слайса):**
-
-- [ ] **S1.** В пакете `internal/slice/registrations_start/` ввести тип `Store struct { db *sql.DB }`, конструктор `NewStore(db *sql.DB) *Store`, метод `(s *Store) PersistRegistrationSession(rs RegistrationSession) error`. Удалить пакетную функцию `persistRegistrationSession`. В `Deps` заменить поле `DB *sql.DB` на `Store *Store`. В `internal/app/wire.go` вызвать `registrations_start.NewStore(db)` и положить в `deps.RegistrationsStart.Store`.
-- [ ] **S2.** То же для `internal/slice/registrations_finish/`: тип `Store`, методы `LoadRegistrationSession` и `FinishRegistration`. Удалить пакетные функции. В `Deps` заменить `DB *sql.DB` на `Store *Store`. Wire — `registrations_finish.NewStore(db)`.
-- [ ] **Юнит-тесты.** Если в S1/S2 есть юниты, использующие `Deps.DB` напрямую, перевести на `Deps.Store` (методы вызывать через объект; in-memory SQLite остаётся внутри `Store`).
-- [ ] **Компонентные тесты.** Не трогать — они работают через HTTP, не через `Deps`. Должны оставаться зелёными.
-- [ ] `go test ./...` зелёный, `./component-tests/scripts/run-tests.sh healthy` зелёный.
-- [ ] Devlog `docs/design/passkey-demo/devlog.md` дополнен блоком «Рефакторинг S1/S2 → Store-объект».
-
-**Ветка:** `refactor/s1-s2-store`. Один коммит — один логический шаг (S1, потом S2, потом тесты), коммитить через Conventional Commits (`refactor(slice): ...`).
 
 ### Шаг 4 — CI на PR
 
@@ -190,3 +171,4 @@ S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 
 - [x] `skills/component-tests/SKILL.md` — процедура генерации компонентных тестов; AGENTS.md §4/§6/§19 обновлены; «Карта режимов отказа» в README; `devlog/04-component-tests-skill.md`
 - [x] Режимы отказа на интеграции SQLite: в OpenAPI добавлены `503 db_locked` и `507 db_disk_full`, расширена «Карта режимов отказа» в README, в SKILL добавлен Шаг 0 «Спроектировать режимы отказа и подготовить раннер», добавлен Шаг 2.0 (шаблон тестов на godog в Docker), детализирован Шаг 2 для sonnet (8 сценариев); `devlog/05-failure-modes.md`
 - [x] Улучшения шаблона по итогам хендоффа sonnet'у: добавлен степ `ответ содержит JSON-поле <key>` (просто наличие, без проверки значения); подровнен `component-tests/README.md` под текущий вид WebAuthn-степов и оба JSON-степа; в `HOW-TO.md` зафиксировано правило «каждый степ из шаблона должен быть прокачен через `.feature`-сценарий до хендоффа» (не только через Go-вызов); в SKILL добавлен второй чек-лист для шаблона с этим правилом; smoke расширен до использования всех трёх JSON-степов
+- [x] Тикет S1/S2-refactor — Store-объект, убрать сырой `*sql.DB` из `Deps` (PR #27): в `internal/slice/registrations_start/` и `internal/slice/registrations_finish/` введён автономный `Store` с методами `PersistRegistrationSession` / `LoadRegistrationSession` / `FinishRegistration`; в `wire.go` `Deps.DB *sql.DB` заменён на `Deps.Store *Store`. Карточки дизайна S1/S2 (Шаг 6 + `feedback_io_autonomous_store`) и код приведены к одному стилю — sonnet, реализующий S4, не увидит расхождения.
