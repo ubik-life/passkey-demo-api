@@ -2,7 +2,7 @@
 
 Граф вызовов модулей слайсов и сверка согласованности контрактов (Шаг 9 `program-design.skill`).
 
-На текущей итерации спроектированы графы слайсов 1 (`registrations-start`), 2 (`registrations-finish`), 3 (`sessions-start`) и 4 (`sessions-finish`). Слайсы 5-6 будут добавлены в следующих итерациях.
+На текущей итерации спроектированы графы слайсов 1 (`registrations-start`), 2 (`registrations-finish`), 3 (`sessions-start`), 4 (`sessions-finish`) и 5 (`sessions-logout`). Слайс 6 будет добавлен в следующей итерации.
 
 ---
 
@@ -538,6 +538,106 @@
 
 ---
 
+## Slice 05 — `sessions-logout`
+
+### Граф вызовов
+
+```
+[ HTTP DELETE /v1/sessions/current ]
+        |
+        | заголовок Authorization: Bearer <jwt>
+        v
++-------------------------------------------------------+
+| ингресс-адаптер: HTTPHandler                          |
+|   parseAuthHeader: header -> SessionLogoutRequest     |
+|   (если нет / не Bearer → 401 напрямую, без head)     |
++-------------------------------------------------------+
+        |
+        | SessionLogoutRequest
+        v
++-------------------------------------------------------+
+| головной модуль: ProcessSessionLogout                 |
++-------------------------------------------------------+
+   |
+   |-- (1) NewSessionLogoutCommand:
+   |        in:  SessionLogoutRequest
+   |        out: (SessionLogoutCommand, error)
+   |        Failure: ErrMissingBearer
+   |
+   |-- (2) VerifyAccessToken [импорт S2, аддитивное расширение]:
+   |        in:  VerifyAccessTokenInput { AccessTokenRaw, PublicKey, ExpectedIssuer, Now }
+   |        out: (AuthenticatedUserID, error)
+   |        Failure: ErrAccessTokenInvalid
+   |
+   |-- (3) Store.RevokeUserSessions:                       [метод I/O-объекта; *sql.DB инкапсулирован в Store]
+   |        in:  RevokeUserSessionsInput { UserID, Now }
+   |        out: error
+   |        Failure: ErrDBLocked, ErrDiskFull
+   |
+   v
+[ ингресс-адаптер: formatResponse ]
+   |
+   |  Success:  () → 204 (без тела)
+   |  Failure:  (адаптер) нет/malformed Authorization → 401 UNAUTHORIZED
+   |            ErrMissingBearer                       → 401 UNAUTHORIZED
+   |            ErrAccessTokenInvalid                  → 401 UNAUTHORIZED
+   |            ErrDBLocked                            → 503 + Retry-After: 1 + db_locked
+   |            ErrDiskFull                            → 507 + db_disk_full
+   |            прочее                                  → 500 INTERNAL_ERROR
+   v
+[ HTTP response ]
+```
+
+### Таблица стрелок
+
+| #  | Кто вызывает              | Кого вызывает                   | Передаёт (data)                          | Получает обратно                       | Классы ошибок                                       |
+|----|---------------------------|---------------------------------|------------------------------------------|----------------------------------------|----------------------------------------------------|
+| A  | HTTP runtime              | ингресс-адаптер.parseAuthHeader | HTTP-заголовок `Authorization`           | `SessionLogoutRequest` или 401 ранний  | нет/malformed → 401 локально (без head)             |
+| B  | ингресс-адаптер           | `ProcessSessionLogout`          | `SessionLogoutRequest`                   | `error`                                 | вся цепочка ниже                                    |
+| 1  | `ProcessSessionLogout`    | `NewSessionLogoutCommand`       | `SessionLogoutRequest`                   | `(SessionLogoutCommand, error)`         | `ErrMissingBearer`                                  |
+| 2  | `ProcessSessionLogout`    | `VerifyAccessToken` [S2]        | `VerifyAccessTokenInput`                 | `(AuthenticatedUserID, error)`          | `ErrAccessTokenInvalid`                             |
+| 3  | `ProcessSessionLogout`    | `Store.RevokeUserSessions`      | `RevokeUserSessionsInput`                | `error`                                 | `ErrDBLocked`, `ErrDiskFull`, низкоуровневые        |
+| C  | ингресс-адаптер           | HTTP runtime (formatResponse)   | `error` или ()                            | HTTP-ответ                               | маппинг `error` → 4xx/5xx                           |
+
+### Чек-лист сверки 9.3
+
+| # | (1) Тип на стрелке существует | (2) Имя сигнатуры совпадает | (3) Консеквент A ⊆ антецеденту B | (4) Тип ошибки согласован | (5) Покрытие Gherkin | (6) Один data-аргумент |
+|---|-----|-----|-----|-----|-----|-----|
+| A  | [x] HTTP-заголовок (string), `SessionLogoutRequest` | [x] handler.parseAuthHeader | [x] адаптер требует только синтаксически валидный заголовок Authorization | [x] нет/malformed → 401 локально | [x] неявно (Then 204 включает успешный парсинг заголовка) | [x] один аргумент: `Authorization` header value |
+| B  | [x] `SessionLogoutRequest`, `error` | [x] `ProcessSessionLogout` | [x] head принимает любой Request с непустой `AccessTokenRaw` (адаптер уже отсёк пустой/malformed); внутренняя валидация в (1) | [x] все ошибки ниже маппятся адаптером | [x] Then «ответ 204» лежит в Success-ветке B | [x] один data-аргумент `req`; `Deps` отдельно |
+| 1  | [x] `SessionLogoutRequest`, `SessionLogoutCommand` | [x] `NewSessionLogoutCommand` | [x] head передаёт уже распарсенный req | [x] `ErrMissingBearer` маппится адаптером в 401 | [x] неявно (Then 204) | [x] один аргумент `req` |
+| 2  | [x] `VerifyAccessTokenInput`, `AuthenticatedUserID`, `error` | [x] `VerifyAccessToken` (S2 экспорт) | [x] AccessTokenRaw — непустая строка из (1); PublicKey/ExpectedIssuer — из конфига; Now — момент | [x] `ErrAccessTokenInvalid` (общий класс) → 401 | [x] неявно (Then 204) | [x] один data-аргумент `input` |
+| 3  | [x] `RevokeUserSessionsInput`, `error` | [x] `Store.RevokeUserSessions` | [x] UserID валиден из `AuthenticatedUserID.UserID()` (гарантировано (2)); миграция 0004 применена | [x] `ErrDBLocked` → 503; `ErrDiskFull` → 507; прочее → 500 | [x] Success — Then 204; Failure-ветки — без отдельного Then на этом эндпоинте (см. ниже про Шаг 0) | [x] один data-аргумент `input` (`*sql.DB` инкапсулирован в `Store`, не виден стрелкой) |
+| C  | [x] `error` или () | [x] handler.formatResponse | [x] head вернул либо nil (Success), либо одну из известных ошибок | [x] полный маппинг в таблице ошибок карточки слайса | [x] Then 204 / 401 / 503+Retry-After / 507 | [x] один data-аргумент: либо nil (204), либо `error` |
+
+**Все стрелки помечены `[x] согласовано`.**
+
+### Покрытие Gherkin-сценариев графом (пункт 9.3.5)
+
+В Gherkin для эндпоинта S5 один Then-шаг — `Тогда ответ 204` (`component-tests/features/sessions-current.feature`, сценарий «Выход инвалидирует refresh token»). Он покрыт цепочкой узлов B → 1 (Success) → 2 (Success) → 3 (Success) → C (204).
+
+Узлов графа, не упомянутых ни одним Then-шагом, **нет**. Failure-ветки (1 `ErrMissingBearer`)/(2 `ErrAccessTokenInvalid`)/(3 `ErrDBLocked`/`ErrDiskFull`) и адаптерный кейс «нет/malformed Authorization → 401» — пути, которые на этом эндпоинте Gherkin не проверяет (по сознательному решению оператора: «отказы — отдельной задачей позже», см. `slices/05-sessions-logout.md` секция «Gherkin-сценарии слайса»).
+
+Это **не** мёртвая логика — часть декларированного OpenAPI-контракта (401 `UNAUTHORIZED`, 503 `db_locked`, 507 `db_disk_full`). Когда сценарии отказа будут дописаны в `sessions-current.feature` отдельной задачей, обратная сверка пройдёт без изменения дизайна — все Failure-узлы и маппинги адаптера уже описаны выше.
+
+### Сверка по правилу «один аргумент» (пункт 9.3.6) и автономии I/O-объекта (Шаг 6)
+
+Все стрелки графа несут **ровно одну** data-сущность. Зависимости (`PublicKey`, `JWTConfig`, `clock`) на стрелках не отображены — они в `Dependencies:` контракта модуля.
+
+**Сырого `*sql.DB` ни на одной стрелке нет.** Узел (3) — метод I/O-объекта `Store`, инкапсулирующего `*sql.DB` (Шаг 6 + `feedback_io_autonomous_store`). В `Deps` головного модуля — поле `*Store`, не сырой `*sql.DB`.
+
+### Применение подправила «подтип, не guard» (Шаг 3 скилла)
+
+Узел (2) `VerifyAccessToken` — конструктор подтипа `AuthenticatedUserID`, инвариант «JWT успешно верифицирован» закреплён в типе. Узел (3) принимает `RevokeUserSessionsInput`, в котором `UserID` распакован через `AuthenticatedUserID.UserID()` — компилятор не даст обойти верификацию (нет другого способа получить `AuthenticatedUserID`, кроме как через `VerifyAccessToken`).
+
+Нет узлов со «висящей» сигнатурой `(Domain) -> ()` или `(input) -> error` без полезного выхода — узлы (1), (2) возвращают новую доменную структуру; узел (3) — I/O-эффект с `error` (правило явно неприменимо к I/O, см. Шаг 3 скилла, секция о guard'ах). Правило соблюдено.
+
+### Замечание о длине пайпа (3 узла, сабфлор скилла)
+
+Пайп головного модуля S5 содержит **3 узла**, что меньше нижней границы рекомендации скилла (5–10). Это сознательное решение оператора и opus'а: см. `slices/05-sessions-logout.md` секция «Решения по дизайну → Длина пайпа: 3 узла — сабфлор скилла». Логаут — операционно простая операция; натянуть padding-узлы было бы нечестно.
+
+---
+
 ## I/O без юнитов (сверка с Шагом 8.1)
 
 В таблице юнит-тестов карточки слайса 1 нет:
@@ -561,13 +661,20 @@
 - ингресс-адаптера (парсинг path/body и маппинг — компонентным);
 - `GenerateTokenPair`, `BuildResponse` (импорт S2; юнит-тесты уже посчитаны в карточке S2).
 
+В таблице юнит-тестов карточки слайса 5 нет:
+- `Store.RevokeUserSessions` (метод I/O-объекта — труба, write);
+- ингресс-адаптера (парсинг заголовка Authorization и маппинг — компонентным);
+- головного модуля `ProcessSessionLogout` (оркестратор-труба, 3 узла).
+
+`VerifyAccessToken` в таблице S5 **есть** (6 юнитов): функция вводится в S5 как аддитивное расширение S2, юнит-формула считается у того, кто вводит модуль. Юнит-тесты `VerifyAccessToken` физически живут в пакете `internal/slice/registrations_finish/` (где определена сама функция).
+
 Это соответствует жёсткому правилу Шага 8.1: I/O проверяется только компонентными сценариями, формула юнит-тестов считается только для модулей логики и конструкторов.
 
 ---
 
 ## Каталог сообщений: транзитивная замкнутость (9.1)
 
-Прошёл `messages.md` для слайсов 1-4:
+Прошёл `messages.md` для слайсов 1-5:
 
 **Слайс 1:**
 - `RegistrationStartRequest` — все поля примитивы.
@@ -618,4 +725,11 @@
 - **Аддитивные расширения S2:** `GenerateTokenPair`, `BuildResponse` экспортируются (обёртки над пакетными `generateTokenPair`/`buildResponse`).
 - **Аддитивные расширения S3:** рехидраторы `LoginSessionIDFromString`, `LoginSessionFromRow` экспортируются.
 
-Ни одного «потом доопределим». Каталог замкнут для слайсов 1-4.
+**Слайс 5:**
+- `SessionLogoutRequest` — поле `string` (`AccessTokenRaw`).
+- `SessionLogoutCommand` — собирается `NewSessionLogoutCommand`; поле неэкспортируемое.
+- `RevokeUserSessionsInput` — value-агрегатор для `Store.RevokeUserSessions`.
+- Sentinel-ошибки: `ErrMissingBearer` определена. `ErrAccessTokenInvalid` — импорт из S2 (общий контракт верификации). `ErrDBLocked`, `ErrDiskFull` — переиспользуются из S1.
+- **Аддитивные расширения S2:** экспортированы `VerifyAccessToken(input VerifyAccessTokenInput) (AuthenticatedUserID, error)`, типы `VerifyAccessTokenInput`, `AuthenticatedUserID` (с методом `UserID()`), sentinel `ErrAccessTokenInvalid`. `VerifyAccessTokenInput` — value-агрегатор; `AuthenticatedUserID` — newtype над `UserID`, создаётся ТОЛЬКО через `VerifyAccessToken` (применение «подтип, не guard»).
+
+Ни одного «потом доопределим». Каталог замкнут для слайсов 1-5.
