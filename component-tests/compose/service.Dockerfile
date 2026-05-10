@@ -5,7 +5,7 @@
 # По мере реализации Шага 3 содержимое cmd/api эволюционирует — Dockerfile
 # уже готов к появлению sqlite-импортов и не требует пересборки инфры.
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.26-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS build
 
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 
@@ -26,7 +26,7 @@ RUN go build \
       -ldflags '-s -w -linkmode external -extldflags "-static"' \
       -o /out/api ./cmd/api
 
-FROM alpine:3
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 
 RUN apk add --no-cache ca-certificates wget && \
     addgroup -S app && adduser -S -G app app && \
