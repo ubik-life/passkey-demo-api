@@ -15,6 +15,7 @@ import (
 	registrations_finish "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_finish"
 	registrations_start "github.com/ubik-life/passkey-demo-api/internal/slice/registrations_start"
 	sessions_finish "github.com/ubik-life/passkey-demo-api/internal/slice/sessions_finish"
+	sessions_logout "github.com/ubik-life/passkey-demo-api/internal/slice/sessions_logout"
 	sessions_start "github.com/ubik-life/passkey-demo-api/internal/slice/sessions_start"
 )
 
@@ -50,6 +51,7 @@ func main() {
 	registrations_finish.Register(mux, deps.RegistrationsFinish)
 	sessions_start.Register(mux, deps.SessionsStart)
 	sessions_finish.Register(mux, deps.SessionsFinish)
+	sessions_logout.Register(mux, deps.SessionsLogout)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,

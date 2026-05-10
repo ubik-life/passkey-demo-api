@@ -174,3 +174,18 @@
 **Стоимость сессии:** $3.72. Время API: 14m 26s, wall: 21m 50s. Изменений: +966 / −102 строк.
 Токены claude-sonnet-4-6: 18.1k input, 55.9k output, 6.9m cache read, 199.5k cache write ($3.72).
 Токены claude-haiku-4-5: 358 input, 14 output, 0 cache read, 0 cache write ($0.0004).
+
+## S5 — реализация sessions-logout (2026-05-10)
+
+**Промпт оператора:** «загрузи контекст и приступи к реализации s5 в девлог запиши кратко как прошла наша сессия»
+
+**Что сделано:** Реализован slice S5 (`DELETE /v1/sessions/current`) по карточке `slices/05-sessions-logout.md`. Новый пакет `internal/slice/sessions_logout/` (6 файлов: errors, domain, io, head, handler, register) + 1 тест-файл. Аддитивные расширения S2 в пакете `registrations_finish`: `verify_token.go` (`VerifyAccessToken`, `VerifyAccessTokenInput`, `AuthenticatedUserID`, `ErrAccessTokenInvalid`) + `verify_token_test.go` (6 честных юнит-тестов). Инфраструктура: `wire.go` и `main.go` расширены, `signer.Public` впервые использован (S5 — первый слайс с верификацией access-токена). Образы Dockerfile'ов пинованы по SHA256. `go test ./...` — 8 новых тестов зелёные. Компонентные тесты `healthy` — `Выход инвалидирует refresh token` зелёный; S1–S4 не регрессировали.
+
+**Диалог с оператором (нетривиальное):**
+- Первый запуск компонентных тестов завалился из-за сетевого сбоя при `apk add gcc` (connection aborted при распаковке `lto-dump` из Alpine CDN). Оператор перестроил сеть.
+- Образы не были пинованы по версии (`golang:1.26-alpine`, `alpine:3`). По просьбе оператора проставлены конкретные версии. `golang:1.26-alpine3.21` не существует — пришлось использовать SHA256-дайджест. `alpine:3.21` существует и пинован обычным тегом + дайджестом.
+- Остаточные контейнеры от неудачных попыток блокировали повторный запуск (Conflict на имени контейнера) — почищены `docker compose down --remove-orphans`.
+
+**Результаты тестов:** 9 сценариев, 7 passed, 2 failed. Оба провала — не S5: (1) `disk-full` профиль — техдолг с S4; (2) `users.feature` — S6 не реализован.
+
+**Регрессия disk-full:** продолжает регрессировать (как в S4). Перенесена в техдолг, явный пункт в DoD S5.

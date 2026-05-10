@@ -11,4 +11,6 @@ var (
 	ErrAttestationInvalid = errors.New("attestation: verification failed")
 
 	ErrHandleTaken = errors.New("user: handle already taken")
+
+	ErrAccessTokenInvalid = errors.New("access token: invalid")
 )

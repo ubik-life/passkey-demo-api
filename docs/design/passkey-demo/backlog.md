@@ -2,7 +2,7 @@
 
 Тикеты для sonnet'а. Один тикет = один слайс = одна ветка = один PR (TBD).
 
-S1 спроектирован и реализован (PR #17). S2 спроектирован и реализован (PR #21). S3 спроектирован и реализован (PR #26). Техдолг S1/S2 → Store-объект закрыт (PR #27). S4 спроектирован (PR #28) и реализован (PR #30). S5 спроектирован (PR #32), ожидает реализации sonnet'ом. S6 проектируется отдельной итерацией opus'а после S5.
+S1 спроектирован и реализован (PR #17). S2 спроектирован и реализован (PR #21). S3 спроектирован и реализован (PR #26). Техдолг S1/S2 → Store-объект закрыт (PR #27). S4 спроектирован (PR #28) и реализован (PR #30). S5 спроектирован (PR #32) и реализован (PR #36, ветка feat/slice-sessions-logout). S6 проектируется отдельной итерацией opus'а после S5.
 
 ---
 
@@ -383,21 +383,21 @@ S5 не вводит новых внешних зависимостей: `github
 
 **Definition of Done:**
 
-- [ ] **аддитивные расширения слайса 2**: экспортированы `VerifyAccessToken(input VerifyAccessTokenInput) (AuthenticatedUserID, error)`, типы `VerifyAccessTokenInput`, `AuthenticatedUserID` (с методом `UserID()`), sentinel `ErrAccessTokenInvalid`. Юнит-тесты S2 остаются зелёными (без изменения существующих тестов; новые 6 юнитов на `VerifyAccessToken` живут в пакете `registrations_finish`).
-- [ ] ингресс-адаптер реализован: парсит заголовок `Authorization: Bearer <jwt>` в `SessionLogoutRequest{AccessTokenRaw}`, без бизнес-валидации (HTTP handler в `internal/slice/sessions_logout/`); пустой/malformed заголовок (нет префикса `"Bearer "`) → 401 `UNAUTHORIZED` напрямую без вызова головного модуля.
-- [ ] конструктор доменной структуры `NewSessionLogoutCommand` реализован; пустая `AccessTokenRaw` → `ErrMissingBearer`.
-- [ ] **I/O-объект `Store` реализован** как автономный объект, инкапсулирующий `*sql.DB`: тип `*Store` в пакете `internal/slice/sessions_logout/`, конструктор `NewStore(db *sql.DB) *Store`, один метод:
+- [x] **аддитивные расширения слайса 2**: экспортированы `VerifyAccessToken(input VerifyAccessTokenInput) (AuthenticatedUserID, error)`, типы `VerifyAccessTokenInput`, `AuthenticatedUserID` (с методом `UserID()`), sentinel `ErrAccessTokenInvalid`. Юнит-тесты S2 остаются зелёными (без изменения существующих тестов; новые 6 юнитов на `VerifyAccessToken` живут в пакете `registrations_finish`).
+- [x] ингресс-адаптер реализован: парсит заголовок `Authorization: Bearer <jwt>` в `SessionLogoutRequest{AccessTokenRaw}`, без бизнес-валидации (HTTP handler в `internal/slice/sessions_logout/`); пустой/malformed заголовок (нет префикса `"Bearer "`) → 401 `UNAUTHORIZED` напрямую без вызова головного модуля.
+- [x] конструктор доменной структуры `NewSessionLogoutCommand` реализован; пустая `AccessTokenRaw` → `ErrMissingBearer`.
+- [x] **I/O-объект `Store` реализован** как автономный объект, инкапсулирующий `*sql.DB`: тип `*Store` в пакете `internal/slice/sessions_logout/`, конструктор `NewStore(db *sql.DB) *Store`, один метод:
   - `(s *Store) RevokeUserSessions(input RevokeUserSessionsInput) error`: одна `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`; маппинг `SQLITE_BUSY` → `ErrDBLocked`, `SQLITE_FULL` → `ErrDiskFull`. Идемпотентность HTTP DELETE: фильтр `revoked_at IS NULL` гарантирует success на повторном вызове (0 affected rows = nil error).
   - Голова `ProcessSessionLogout` обращается к БД **только через этот метод**; `*sql.DB` нигде кроме `Store` не светится в slice-пакете.
-- [ ] головной модуль `ProcessSessionLogout` реализован: пайп из 3 узлов (см. псевдокод в карточке слайса), ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`. **3 узла — сабфлор скилла (5–10), осознанное расхождение, обоснование в карточке.**
-- [ ] **новых миграций нет** — слайс использует `0004_refresh_tokens.sql` (UPDATE поля `revoked_at`, колонка декларирована именно для S5 ещё в S2). Никаких ALTER TABLE / новых файлов в `internal/db/migrations/` для S5 не создавать. Композитный индекс `(user_id, revoked_at)` — не вводится.
-- [ ] инфраструктурный модуль расширен: `Deps` слайса 5 (`Store *Store`, `Clock`, `Logger`, `Verifier ed25519.PublicKey`, `JWT JWTConfig` — **без** сырого `*sql.DB`); подключение `sessions_logout.Register(mux, deps.SessionsLogout)` в `cmd/api/main.go`; в `wire.go` создаётся `sessions_logout.NewStore(db)` и пробрасывается в `Deps.Store`. Поле `Verifier` берётся из `signer.Public` (тот же `Signer` структуры из `wire.go`, сейчас передающий только `signer.Private` в S2/S4; S5 — первое использование парного публичного ключа).
-- [ ] слайс подключён через `sessions_logout.Register(mux, deps)`: HTTP-роут `DELETE /v1/sessions/current` ведёт на ингресс-адаптер.
-- [ ] **юнит-тесты по формуле написаны и зелёные** — `go test ./...` проходит. **8 новых тестов**: 2 на `NewSessionLogoutCommand` (в пакете `sessions_logout`) + 6 на `VerifyAccessToken` (в пакете `registrations_finish` — там же, где сам `VerifyAccessToken`); головной модуль, I/O-модуль и ингресс-адаптер юнитами не покрываются. `VerifyAccessToken` honest-тестируется через `generateTokenPair` + два честных Ed25519-keypair'а, без моков (`feedback_no_mocks`). Юниты S1/S2/S3/S4 остаются зелёными после аддитивных расширений S2.
-- [ ] **компонентные тесты, профиль `healthy`, зелёные** — `./component-tests/scripts/run-tests.sh healthy` проходит. Новый зелёный сценарий: `Сценарий: Выход инвалидирует refresh token` (`component-tests/features/sessions-current.feature`). Ранее зелёные сценарии S1-S4 продолжают проходить.
-- [ ] **компонентные тесты, профиль `disk-full`, зелёные** — `./component-tests/scripts/run-tests.sh disk-full` проходит. Regression-проверка: `Сценарий: Диск переполнен при завершении регистрации` из S2. Если профиль продолжает регрессировать (как в S4), отметка переносится в техдолг с явным разрешением оператора.
-- [ ] сценарии в `users.feature` остаются красными в их Then-частях (S6 ещё не реализован), но **не** ломаются на When-шагах S1–S5.
-- [ ] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`).
+- [x] головной модуль `ProcessSessionLogout` реализован: пайп из 3 узлов (см. псевдокод в карточке слайса), ранний возврат при ошибке через `fmt.Errorf("…: %w", err)`. **3 узла — сабфлор скилла (5–10), осознанное расхождение, обоснование в карточке.**
+- [x] **новых миграций нет** — слайс использует `0004_refresh_tokens.sql` (UPDATE поля `revoked_at`, колонка декларирована именно для S5 ещё в S2). Никаких ALTER TABLE / новых файлов в `internal/db/migrations/` для S5 не создавать. Композитный индекс `(user_id, revoked_at)` — не вводится.
+- [x] инфраструктурный модуль расширен: `Deps` слайса 5 (`Store *Store`, `Clock`, `Logger`, `Verifier ed25519.PublicKey`, `JWT JWTConfig` — **без** сырого `*sql.DB`); подключение `sessions_logout.Register(mux, deps.SessionsLogout)` в `cmd/api/main.go`; в `wire.go` создаётся `sessions_logout.NewStore(db)` и пробрасывается в `Deps.Store`. Поле `Verifier` берётся из `signer.Public` (тот же `Signer` структуры из `wire.go`, сейчас передающий только `signer.Private` в S2/S4; S5 — первое использование парного публичного ключа).
+- [x] слайс подключён через `sessions_logout.Register(mux, deps)`: HTTP-роут `DELETE /v1/sessions/current` ведёт на ингресс-адаптер.
+- [x] **юнит-тесты по формуле написаны и зелёные** — `go test ./...` проходит. **8 новых тестов**: 2 на `NewSessionLogoutCommand` (в пакете `sessions_logout`) + 6 на `VerifyAccessToken` (в пакете `registrations_finish` — там же, где сам `VerifyAccessToken`); головной модуль, I/O-модуль и ингресс-адаптер юнитами не покрываются. `VerifyAccessToken` honest-тестируется через `generateTokenPair` + два честных Ed25519-keypair'а, без моков (`feedback_no_mocks`). Юниты S1/S2/S3/S4 остаются зелёными после аддитивных расширений S2.
+- [x] **компонентные тесты, профиль `healthy`, зелёные** — `./component-tests/scripts/run-tests.sh healthy` проходит. Новый зелёный сценарий: `Сценарий: Выход инвалидирует refresh token` (`component-tests/features/sessions-current.feature`). Ранее зелёные сценарии S1-S4 продолжают проходить.
+- [ ] **компонентные тесты, профиль `disk-full`, зелёные** — техдолг: профиль регрессировал ещё в S4 (tmpfs 2 МБ не вмещает БД с S3-миграцией). Перенесён в техдолг с явным разрешением оператора (как в S4).
+- [x] сценарии в `users.feature` остаются красными в их Then-частях (S6 ещё не реализован), но **не** ломаются на When-шагах S1–S5.
+- [x] `backlog.md` обновлён по каждому подтверждённому пункту (правило `AGENTS.md §10`).
 - [ ] `docs/design/passkey-demo/devlog.md` дополнен блоком S5.
 - [ ] PR создан, описание заполнено по шаблону Шага 8 скилла sonnet'а.
 - [ ] PR смержен в main, CI на main зелёный.
