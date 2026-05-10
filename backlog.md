@@ -125,13 +125,13 @@ component-tests/
 | Slice | Эндпоинт | Failure-режим | Статус |
 |---|---|---|---|
 | S1 — registrations-start | `POST /v1/registrations` | — | done (PR #17) |
-| S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | done (PR #XX) |
+| S2 — registrations-finish | `POST /v1/registrations/{id}/attestation` | `db_disk_full` | done (PR #21) |
 | S3 — sessions-start | `POST /v1/sessions` | — | done (PR #26) |
-| S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | спроектирован, ожидает реализации (дизайн смержен PR #28) |
-| S5 — sessions-logout | `DELETE /v1/sessions/current` | — | todo (дизайн) |
+| S4 — sessions-finish | `POST /v1/sessions/{id}/assertion` | `db_locked` | done (PR #30) |
+| S5 — sessions-logout | `DELETE /v1/sessions/current` | — | спроектирован (PR #32), ожидает реализации |
 | S6 — users-me | `GET /v1/users/me` | — | todo (дизайн) |
 
-S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 опираются на auth-middleware, который появится в S2 вместе с JWT.
+S2 вводит JWT (Ed25519), сущности `User` и `Credential`. S5–S6 опираются на JWT — верификация access-токена реализована как **аддитивный экспорт `VerifyAccessToken` из пакета S2** (не отдельный auth-middleware): каждый защищённый слайс вызывает её первым шагом своего пайпа. Решение зафиксировано в `docs/design/passkey-demo/slices/05-sessions-logout.md` секция «Решения по дизайну»; пересмотр (вынос в `internal/auth/`) — в Шаге 5 этого backlog'а после реализации S6.
 
 **Цикл одного slice'а:**
 1. Opus на ветке `feat/design-<slice>` расширяет `messages.md`, `contracts-graph.md`, добавляет `slices/NN-<slice>.md`, тикет в `docs/design/passkey-demo/backlog.md`. PR в main.
