@@ -1004,3 +1004,153 @@ func (s *Store) FinishLogin(input FinishLoginInput) error
 
 **Решение — `LoadLoginSession` и `LoadAssertionTarget` как два отдельных метода, не один.** Альтернатива — слить в один read-метод `LoadLoginContext({id, credentialID}) -> {Fresh, Target}` — нарушает Шаг 3 «один data-аргумент» (методу пришлось бы принимать кортеж id+credentialID без естественной доменной структуры) и склеивает два логически независимых SELECT'а: «найти сессию» и «найти credential свою» — каждый со своим классом ошибок (`ErrLoginSessionNotFound` vs `ErrCredentialNotFound`). Слияние ухудшит читаемость failure-маппинга в адаптере. Берём два метода.
 
+## Структуры слайса 5 — `sessions-logout`
+
+Слайс 5 импортирует:
+- из слайса 1: `ErrDBLocked`, `ErrDiskFull`;
+- из слайса 2: `UserID` и (после аддитивных расширений) `VerifyAccessToken`, `AuthenticatedUserID`, `VerifyAccessTokenInput`, `JWTConfig`, ошибки `ErrAccessTokenInvalid`.
+
+### Аддитивные расширения слайса 2 для слайса 5
+
+S2 — владелец JWT-формата (issuer, claims, алгоритм подписи): он же владеет валидацией. S5 (а далее и S6) импортируют верификацию access-токена как публичную функцию S2, по аналогии с `GenerateTokenPair`/`BuildResponse`.
+
+```go
+// VerifyAccessTokenInput — value-объект-агрегатор для VerifyAccessToken.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type VerifyAccessTokenInput struct {
+    AccessTokenRaw   string             // JWT compact serialization без префикса "Bearer "
+    PublicKey        ed25519.PublicKey  // парный ключ к Signer; берётся из инфраструктурного модуля
+    ExpectedIssuer   string             // JWTConfig.Issuer
+    Now              time.Time
+}
+
+// AuthenticatedUserID — newtype над UserID. Подтип, несущий инвариант «JWT успешно верифицирован
+// этим процессом» в типе. Создаётся ТОЛЬКО через VerifyAccessToken: ни один другой код не может
+// собрать AuthenticatedUserID из сырого UserID. Применение подправила «подтип, не guard»
+// (program-design.skill Шаг 3) к access-токену.
+//
+// Шаги пайпа S5/S6, требующие аутентификации, принимают AuthenticatedUserID, не сырой UserID —
+// система типов гарантирует, что в эти шаги нельзя случайно передать неверифицированного пользователя.
+type AuthenticatedUserID struct {
+    userID UserID
+}
+
+func (a AuthenticatedUserID) UserID() UserID
+
+// VerifyAccessToken парсит и верифицирует access JWT.
+// Внутри:
+//   1. jwt.ParseWithClaims с jwt.SigningMethodEdDSA и input.PublicKey — проверка подписи + структуры.
+//   2. Проверка claim Issuer == input.ExpectedIssuer.
+//   3. Проверка claim ExpiresAt > input.Now (jwt-библиотека делает это сама при парсинге;
+//      повторно проверяется явно для согласованности с input.Now из clock-инъекции).
+//   4. Парсинг claim Subject как UUID → UserID.
+// На любую ошибку — ErrAccessTokenInvalid (общий класс; различение причины — в логах вызывающего).
+func VerifyAccessToken(input VerifyAccessTokenInput) (AuthenticatedUserID, error)
+```
+
+Юнит-тесты S2 на `VerifyAccessToken` посчитаны в карточке S5 (по правилу «формула считается у того, кто вводит модуль»; альтернатива — пересчитывать формулу S2, тогда нужен повторный handoff S2; не выбрана).
+
+`AuthenticatedUserID`, `VerifyAccessTokenInput` — value-типы, без сложных инвариантов; рехидраторов не имеют (создание только через `VerifyAccessToken`).
+
+### Ошибки (расширение S2)
+
+```go
+// Класс ошибок верификации access-токена.
+// Маппится ингресс-адаптерами слайсов 5/6 в 401 UNAUTHORIZED.
+// Покрывает все под-причины: parse fail, signature mismatch, expired, issuer mismatch,
+// claim Subject не парсится как UUID. Различение под-причин — в логах метода
+// (`logger.Warn("access token rejected", "reason", "signature")` и т.д.).
+var (
+    ErrAccessTokenInvalid = errors.New("access token: invalid")
+)
+```
+
+Единый класс — то же решение, что для `ErrAssertionInvalid` в S2 и `ErrCredentialNotFound` в S4. Клиент 401 ↔ 401 не различает; в логах — различает.
+
+### Request DTO (ингресс-адаптер слайса 5)
+
+```go
+// SessionLogoutRequest — невалидированный вход из HTTP-адаптера.
+// Маппится из заголовка Authorization: Bearer <jwt>.
+// Тело запроса не используется (DELETE без тела по REST-конвенции и OpenAPI).
+type SessionLogoutRequest struct {
+    AccessTokenRaw string  // содержимое заголовка Authorization после префикса "Bearer "
+}
+```
+
+### Доменные структуры
+
+```go
+// SessionLogoutCommand — валидированная команда выхода.
+// Поля неэкспортируемые. Создаётся только через NewSessionLogoutCommand.
+//
+// Сейчас содержит ровно одно поле — сырой JWT. Команда вводится:
+//   1. Чтобы инкапсулировать «не-пустой Bearer-токен» как доменный инвариант
+//      (адаптер просто переносит строку, валидация — в конструкторе).
+//   2. Чтобы пайп головного модуля начинался с однотипного `NewXxxCommand(req)`,
+//      как в S2/S3/S4 (читаемость).
+type SessionLogoutCommand struct {
+    accessTokenRaw string
+}
+
+func NewSessionLogoutCommand(req SessionLogoutRequest) (SessionLogoutCommand, error)
+// Проверяет: req.AccessTokenRaw != "". Если пустой — ErrMissingBearer.
+// Failure: ErrMissingBearer (адаптер не положил Bearer-токен в DTO).
+
+func (c SessionLogoutCommand) AccessTokenRaw() string
+```
+
+### Ошибки слайса 5
+
+```go
+// Класс ошибок адаптера/команды.
+// Маппится ингресс-адаптером в 401 UNAUTHORIZED.
+var (
+    ErrMissingBearer = errors.New("authorization: missing bearer token")
+)
+
+// ErrAccessTokenInvalid импортируется из S2 (общий контракт).
+// ErrDBLocked, ErrDiskFull импортируются из S1 (общий контракт SQLite).
+```
+
+`ErrMissingBearer` и `ErrAccessTokenInvalid` оба маппятся в **401 UNAUTHORIZED** — для клиента это одна ошибка («залогинься заново»). Различение нужно только в логах.
+
+### I/O-объект слайса 5 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 5 — поле `Store *Store`, не сырой `*sql.DB`.
+
+```go
+// Store — автономный I/O-объект слайса 5, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — головной модуль обращается к БД исключительно через методы.
+type Store struct {
+    db *sql.DB
+}
+
+func NewStore(db *sql.DB) *Store
+
+// RevokeUserSessionsInput — value-объект-агрегатор для Store.RevokeUserSessions.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type RevokeUserSessionsInput struct {
+    UserID UserID     // распакован из AuthenticatedUserID головным модулем
+    Now    time.Time  // момент инвалидации, пишется в revoked_at
+}
+
+// RevokeUserSessions — write-метод. Контракт: см. slices/05-sessions-logout.md.
+//
+// Внутри одной операции (single UPDATE в SQLite атомарен):
+//   UPDATE refresh_tokens
+//      SET revoked_at = ?
+//    WHERE user_id = ?
+//      AND revoked_at IS NULL
+//
+// Идемпотентность HTTP DELETE: повторный вызов не обновит уже отозванные строки
+// (фильтр по revoked_at IS NULL), вернёт success даже если 0 строк затронуто.
+//
+// Маппинг: SQLITE_BUSY → ErrDBLocked; SQLITE_FULL → ErrDiskFull.
+func (s *Store) RevokeUserSessions(input RevokeUserSessionsInput) error
+```
+
+**Один объект, один метод.** В отличие от S2-S4, S5 имеет один I/O-метод. Это нормально — слайс операционно проще; ввод объекта вместо пакетной функции делается ради единообразия с остальным кодом (`feedback_io_autonomous_store`), а не ради инкапсуляции нескольких методов.
+
+**Семантика «выйти со всех устройств».** S5 отзывает все активные refresh-токены пользователя, не «текущий» (см. карточку слайса, секцию «Решения по дизайну»). Альтернатива «отозвать только токен текущей сессии» требует расширения JWT-claims (`jti` или `session_id`) и изменения схемы — отложено как scope creep; для демо-сервиса достаточно «logout-from-all».
+

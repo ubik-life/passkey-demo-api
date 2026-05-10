@@ -107,8 +107,8 @@ main():
     registrationsFinish.Register(mux, deps.RegistrationsFinish)   // [S2]
     sessionsStart.Register(mux, deps.SessionsStart)               // [S3]
     sessionsFinish.Register(mux, deps.SessionsFinish)             // [S4]
+    sessionsLogout.Register(mux, deps.SessionsLogout)             // [S5]
     // в следующих итерациях:
-    // sessionsLogout.Register(mux, deps.SessionsLogout)
     // usersMe.Register(mux, deps.UsersMe)
 
     srv := &http.Server{ Addr: cfg.ListenAddr, Handler: mux }
@@ -261,6 +261,49 @@ deps.SessionsFinish = sessions_finish.Deps{
 
 > **Технический долг S1/S2 (повтор).** Реализация S4 потребует, чтобы в `Deps.Store` лежал автономный `*Store`, не сырой `*sql.DB`. К моменту, когда sonnet возьмёт тикет S4, техдолг S1/S2 (отдельный тикет в root `backlog.md`, ветка `refactor/s1-s2-store`) **должен быть закрыт** — иначе S4 окажется единственным слайсом с правильным `Deps.Store`, а S1/S2 продолжат держать сырой `*sql.DB`, и в `wire.go` будет смешанный стиль. Альтернатива — закрыть техдолг одним PR вместе с реализацией S4 (что нарушит правило «связанные правки — одна ветка», поэтому не предпочтительно). См. соответствующий пункт в тикете S4 (`docs/design/passkey-demo/backlog.md`).
 
+## Подключение слайса 5 (S5)
+
+```go
+// internal/slice/sessions_logout/register.go
+package sessions_logout
+
+func Register(mux chi.Router, deps Deps) {
+    h := newHTTPHandler(deps)
+    mux.Delete("/v1/sessions/current", h.ServeHTTP)
+}
+
+// Deps — зависимости слайса 5.
+// Применение Шага 6 скилла + feedback_io_autonomous_store: БД-зависимость
+// инкапсулирована в *Store, головной модуль её не видит. Сырого *sql.DB здесь нет.
+type Deps struct {
+    Store    *Store                          // автономный I/O-объект слайса 5, инкапсулирующий *sql.DB
+    Clock    clock.Clock
+    Logger   *slog.Logger
+    Verifier ed25519.PublicKey               // парный публичный ключ к Signer.Private (тот же Signer-структуры из wire.go)
+    JWT      registrations_finish.JWTConfig  // импорт из S2; используется поле Issuer для проверки claim
+}
+```
+
+В `wire.go` инфраструктурный модуль создаёт `Store` и пробрасывает в `Deps`:
+
+```go
+// internal/app/wire.go (фрагмент для S5)
+sessionsLogoutStore := sessions_logout.NewStore(db)  // db *sql.DB — общий пул из db.Open
+deps.SessionsLogout = sessions_logout.Deps{
+    Store:    sessionsLogoutStore,
+    Clock:    clk,
+    Logger:   log.With("slice", "sessions-logout"),
+    Verifier: signer.Public,                          // публичный ключ — впервые используется S5
+    JWT:      cfg.JWT,
+}
+```
+
+В S5 не нужны `RP`, `Signer.Private`, `ChallengeTTL`: логаут не верифицирует assertion (нет WebAuthn-операции) и не подписывает новые токены (только отзывает существующие).
+
+**Поле `Verifier ed25519.PublicKey` — впервые используется в S5.** Раздел «Ed25519 keypair (S2)» выше уже отметил план: «Public key понадобится в S5/S6 (валидация access JWT)». В S2 и S4 в `Deps.Signer` лежит только `signer.Private`. С приходом S5 в `wire.go` появляется второе использование того же `Signer`-объекта — теперь `signer.Public`. Никаких изменений в генерации (та же `generateSigner()`).
+
+**Никаких новых миграций S5 не вводит.** Слайс использует таблицу `refresh_tokens` (S2 миграция `0004`), колонку `revoked_at` (которая там уже декларирована именно для S5). Никаких ALTER TABLE / новых файлов в `internal/db/migrations/` для S5 не создавать.
+
 ## Миграции
 
 ```
@@ -369,9 +412,15 @@ DROP TABLE IF EXISTS login_sessions;
 
 S4 (`sessions-finish`) использует существующие таблицы: `login_sessions` (S3), `credentials` (S2, поле `sign_count` уже есть), `refresh_tokens` (S2). Атомарная транзакция S4 — `UPDATE credentials SET sign_count = ?` + `INSERT INTO refresh_tokens (...)` + `DELETE FROM login_sessions WHERE id = ?` — выполняется без изменения схемы.
 
+### S5 — без новых миграций
+
+S5 (`sessions-logout`) использует существующую таблицу `refresh_tokens` (S2 миграция `0004`), колонку `revoked_at` (которая в `0004` декларирована «заполняется в S5 при logout»). Одна `UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL` — выполняется без изменения схемы.
+
+Композитный индекс `(user_id, revoked_at)` — **не вводится** (низкая cardinality `user_id`, активных refresh на user типично 1-2; индекс по `user_id` уже есть в `0004`, фильтр `revoked_at IS NULL` обрабатывается scan'ом по строкам user'а). Если в будущем нагрузочный профиль изменится — добавим аддитивно.
+
 ### Будущие миграции
 
-Дополнительные миграции возможны в S5 (logout — может понадобиться индекс `revoked_at` на `refresh_tokens`, но отложим до проектирования S5).
+Возможны в S6, если `GET /v1/users/me` потребует расширения таблицы `users` дополнительными полями. Зафиксируется при проектировании S6.
 
 ## Health-эндпоинт
 
