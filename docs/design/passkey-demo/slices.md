@@ -8,8 +8,8 @@
 | 2 | HTTP | `POST /v1/registrations/{id}/attestation` | `registrations-finish` | Фаза 2 регистрации: верифицировать attestation, создать пользователя и credential, выдать JWT-пару | реализован (PR #21) |
 | 3 | HTTP | `POST /v1/sessions` | `sessions-start` | Фаза 1 входа: принять handle, найти пользователя и credential, создать challenge, вернуть `{id, options}` | реализован (PR #26) |
 | 4 | HTTP | `POST /v1/sessions/{id}/assertion` | `sessions-finish` | Фаза 2 входа: верифицировать assertion, обновить счётчик, выдать JWT-пару | реализован (PR #30) |
-| 5 | HTTP | `DELETE /v1/sessions/current` | `sessions-logout` | Инвалидация refresh token текущей сессии (logout-from-all для аутентифицированного user'а) | спроектирован |
-| 6 | HTTP | `GET /v1/users/me` | `users-me` | Возврат данных пользователя из access token | todo |
+| 5 | HTTP | `DELETE /v1/sessions/current` | `sessions-logout` | Инвалидация refresh token текущей сессии (logout-from-all для аутентифицированного user'а) | реализован (PR #36) |
+| 6 | HTTP | `GET /v1/users/me` | `users-me` | Возврат данных пользователя из access token | спроектирован |
 
 ## Зависимости между слайсами
 
@@ -35,3 +35,5 @@
 **Важно для слайса 2.** На эндпоинте `POST /v1/registrations/{id}/attestation` Gherkin покрывает happy + `db_disk_full`. `db_locked` декларирован OpenAPI, но не имеет компонентного сценария именно здесь (привязан к слайсу 4). Доменные ошибки (`HANDLE_TAKEN` race, `ATTESTATION_INVALID`, `NOT_FOUND` для истёкшей/отсутствующей сессии) — без компонентных сценариев, проверяются юнит-тестами модулей логики и контрактом OpenAPI.
 
 **Важно для слайса 5.** На эндпоинте `DELETE /v1/sessions/current` Gherkin сейчас содержит **только happy path** («Выход инвалидирует refresh token»); сценариев отказа (`db_locked`, `db_disk_full`, `UNAUTHORIZED`) нет. Это сознательное решение оператора при дизайне S5: «отказы — отдельной задачей позже». OpenAPI декларирует 401/503/507 на этом эндпоинте, поэтому код S5 **должен** маппить соответствующие классы ошибок в эти статусы (без отдельного Gherkin-сценария именно здесь). Когда сценарии отказа будут дописаны в `sessions-current.feature` отдельной задачей, обратная сверка дизайна S5 пройдёт без переделки. См. `slices/05-sessions-logout.md` секцию «Gherkin-сценарии слайса» и хендофф-чеклист S5 в `backlog.md`.
+
+**Важно для слайса 6.** На эндпоинте `GET /v1/users/me` Gherkin сейчас содержит **только happy path** («Возвращает данные пользователя из токена»); сценариев отказа (`UNAUTHORIZED`, `db_locked`, `INTERNAL_ERROR` для consistency-аномалии) нет — то же сознательное решение оператора, что в S5. OpenAPI декларирует 401/503 на этом эндпоинте; для аномалии `ErrUserNotFound` после успешной верификации JWT выбран маппинг → 500 `INTERNAL_ERROR` (см. `slices/06-users-me.md` секцию «Решения по дизайну → Маппинг `ErrUserNotFound` → 500»). Код S6 **должен** маппить все эти классы ошибок без отдельных Gherkin-сценариев. 507 `db_disk_full` на S6 не применим — read-only эндпоинт, SELECT не возвращает `SQLITE_FULL`.

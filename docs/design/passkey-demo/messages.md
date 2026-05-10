@@ -1154,3 +1154,123 @@ func (s *Store) RevokeUserSessions(input RevokeUserSessionsInput) error
 
 **Семантика «выйти со всех устройств».** S5 отзывает все активные refresh-токены пользователя, не «текущий» (см. карточку слайса, секцию «Решения по дизайну»). Альтернатива «отозвать только токен текущей сессии» требует расширения JWT-claims (`jti` или `session_id`) и изменения схемы — отложено как scope creep; для демо-сервиса достаточно «logout-from-all».
 
+## Структуры слайса 6 — `users-me`
+
+Слайс 6 импортирует:
+- из слайса 1: `ErrDBLocked`;
+- из слайса 2: `User`, `UserID`, `JWTConfig` и (после аддитивных расширений S2 для S3): `UserFromRow`, `UserIDFromString`; (после аддитивных расширений S2 для S5): `VerifyAccessToken`, `AuthenticatedUserID`, `VerifyAccessTokenInput`, `ErrAccessTokenInvalid`.
+
+**Аддитивных расширений S1/S2/S3/S4/S5 слайс 6 не требует.** Всё нужное уже экспортировано предыдущими слайсами; S6 — первый слайс, который собирается из существующих публичных API без новых экспортов в других пакетах. Это — следствие того, что S5 уже экспортировал всё для Bearer-auth, а S3 — рехидраторы пользовательских строк.
+
+### Request DTO (ингресс-адаптер слайса 6)
+
+```go
+// UsersMeRequest — невалидированный вход из HTTP-адаптера.
+// Маппится из заголовка Authorization: Bearer <jwt>.
+// Тело запроса не используется (GET без тела по REST-конвенции и OpenAPI).
+type UsersMeRequest struct {
+    AccessTokenRaw string  // содержимое заголовка Authorization после префикса "Bearer "
+}
+```
+
+### Доменные структуры
+
+```go
+// UsersMeCommand — валидированная команда «верни мой профиль».
+// Поля неэкспортируемые. Создаётся только через NewUsersMeCommand.
+//
+// Содержит ровно одно поле — сырой JWT. Команда вводится по тем же причинам,
+// что SessionLogoutCommand в S5: чтобы инкапсулировать «не-пустой Bearer-токен»
+// как доменный инвариант (адаптер просто переносит строку, валидация —
+// в конструкторе) и чтобы пайп начинался с однотипного `NewXxxCommand(req)`.
+type UsersMeCommand struct {
+    accessTokenRaw string
+}
+
+func NewUsersMeCommand(req UsersMeRequest) (UsersMeCommand, error)
+// Проверяет: req.AccessTokenRaw != "". Если пустой — ErrMissingBearer.
+// Failure: ErrMissingBearer (адаптер не положил Bearer-токен в DTO).
+
+func (c UsersMeCommand) AccessTokenRaw() string
+```
+
+### Ошибки слайса 6
+
+```go
+// Класс ошибок адаптера/команды.
+// Маппится ингресс-адаптером в 401 UNAUTHORIZED.
+//
+// Локальный sentinel в пакете users_me, а не импорт из sessions_logout (S5).
+// Аргументация — в карточке слайса, секция «Решения по дизайну → ErrMissingBearer
+// — локальный, не импорт из S5».
+var (
+    ErrMissingBearer = errors.New("authorization: missing bearer token")
+)
+
+// Класс ошибок аномалии согласованности.
+// Маппится ингресс-адаптером в 500 INTERNAL_ERROR.
+//
+// Возникает, если JWT успешно верифицирован, но в БД нет строки users по claim Subject.
+// На текущей кодовой базе (S2-S5) случай невозможен — нет операции удаления users.
+// Это будущий case (например, гипотетический admin-эндпоинт DELETE /users/{id}).
+//
+// Маппинг → 500 (а не 401 / 404) обоснован в карточке слайса, секция «Решения по
+// дизайну → Маппинг ErrUserNotFound → 500».
+var (
+    ErrUserNotFound = errors.New("user: not found")
+)
+
+// ErrAccessTokenInvalid импортируется из S2 (общий контракт верификации, введён в S5).
+// ErrDBLocked импортируется из S1 (общий контракт SQLite read).
+// ErrDiskFull НЕ применим к S6: read-only эндпоинт, SELECT не возвращает SQLITE_FULL.
+```
+
+> **Примечание про конфликт имён.** Sentinel `ErrUserNotFound` определён также в S3 (`internal/slice/sessions_start/`) с другим контекстом — «нет пользователя по handle при попытке логина». В Go это разные значения в разных пакетах (`sessions_start.ErrUserNotFound` vs `users_me.ErrUserNotFound`); компилятор различает их по пакету. Семантически тоже различны: S3 — «handle не зарегистрирован» (нормальный кейс, → 404), S6 — «consistency anomaly» (аномалия, → 500). Имя одинаковое — намеренно, отражает одно и то же физическое отсутствие строки `users`; маппинг разный, потому что разный контекст возникновения.
+
+### Response DTO (формируется логикой, сериализуется адаптером)
+
+```go
+// UserProfileResponse — ответ GET /v1/users/me 200.
+// Точно соответствует схеме User в OpenAPI (id + handle).
+type UserProfileResponse struct {
+    ID     string `json:"id"`     // user.ID().String() — UUID
+    Handle string `json:"handle"` // user.Handle().Value() — строка из БД
+}
+
+// buildResponse маппит доменную сущность в DTO.
+// deps: —
+// Failure: — (чистая функция; антецедент гарантирован предыдущим узлом
+//          пайпа — User либо собран конструктором, либо рехидрирован UserFromRow).
+func buildResponse(user User) UserProfileResponse
+```
+
+### I/O-объект слайса 6 — `Store`
+
+Применение **правила автономного IO-объекта** (Шаг 6 скилла + `feedback_io_autonomous_store`): зависимость `*sql.DB` инкапсулирована в объекте `Store`, головной модуль её не видит. В `Deps` слайса 6 — поле `Store *Store`, не сырой `*sql.DB`.
+
+```go
+// Store — автономный I/O-объект слайса 6, инкапсулирующий *sql.DB.
+// Поле db неэкспортируемое — головной модуль обращается к БД исключительно через методы.
+type Store struct {
+    db *sql.DB
+}
+
+func NewStore(db *sql.DB) *Store
+
+// LoadUserInput — value-объект-агрегатор для Store.LoadUser.
+// «Один data-аргумент» (Шаг 3 program-design.skill).
+type LoadUserInput struct {
+    UserID UserID  // распакован из AuthenticatedUserID головным модулем
+}
+
+// LoadUser — read-метод. Контракт: см. slices/06-users-me.md.
+//
+// Внутри: SELECT id, handle, created_at FROM users WHERE id = ?
+// Если строки нет — ErrUserNotFound (аномалия согласованности).
+// Маппинг: SQLITE_BUSY → ErrDBLocked. ErrDiskFull для read не различается.
+// Рехидрирует через UserFromRow (S3 экспорт из S2).
+func (s *Store) LoadUser(input LoadUserInput) (User, error)
+```
+
+**Один объект, один метод.** Как в S5: слайс операционно прост, ввод объекта — ради единообразия (`feedback_io_autonomous_store`), не ради инкапсуляции нескольких методов.
+
