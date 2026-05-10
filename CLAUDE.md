@@ -53,12 +53,13 @@ devlog/
 | README.md | done |
 | Шаблон компонентных тестов (Шаг 2.0) | done |
 | Gherkin-сценарии (Шаг 2) | done |
-| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1/S2/S3 реализованы, техдолг S1/S2 → Store закрыт (PR #27), S4 спроектирован (PR #28), ожидает реализации |
+| Go-сервер (Шаг 3, slice-by-slice) | in progress — S1/S2/S3/S4 реализованы (PR #17, #21, #26, #30), техдолг S1/S2 → Store закрыт (PR #27), S5 спроектирован (PR #32), ожидает реализации |
 | CI на PR (Шаг 4) | todo |
+| Архитектурное ретро S5 (Шаг 5) | todo (после реализации S6) |
 
 ## Следующий шаг
 
-Реализация S4 sonnet'ом (`sessions-finish` — `POST /v1/sessions/{id}/assertion`, фаза 2 входа, верификация assertion, обновление signCount, выдача JWT-пары, режим `db_locked`). Карточка `docs/design/passkey-demo/slices/04-sessions-finish.md`, тикет в `docs/design/passkey-demo/backlog.md`. Ветка `feat/slice-sessions-finish`. После мержа S4 — дизайн S5 (`sessions-logout`) opus'ом на скилле `program-design`.
+Реализация S5 sonnet'ом (`sessions-logout` — `DELETE /v1/sessions/current`, инвалидация всех активных refresh-токенов аутентифицированного user'а, аддитивный экспорт `VerifyAccessToken` из S2, без новых миграций). Карточка `docs/design/passkey-demo/slices/05-sessions-logout.md`, тикет в `docs/design/passkey-demo/backlog.md`, аппрув оператора в чеклисте проставлен 2026-05-10. Ветка `feat/slice-sessions-logout`. После мержа S5 — дизайн S6 (`users-me`) opus'ом на скилле `program-design`.
 
 ## Принятые решения
 
