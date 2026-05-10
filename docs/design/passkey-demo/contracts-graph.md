@@ -638,6 +638,117 @@
 
 ---
 
+## Slice 06 — `users-me`
+
+### Граф вызовов
+
+```
+[ HTTP GET /v1/users/me ]
+        |
+        | заголовок Authorization: Bearer <jwt>
+        v
++-------------------------------------------------------+
+| ингресс-адаптер: HTTPHandler                          |
+|   parseAuthHeader: header -> UsersMeRequest           |
+|   (если нет / не Bearer → 401 напрямую, без head)     |
++-------------------------------------------------------+
+        |
+        | UsersMeRequest
+        v
++-------------------------------------------------------+
+| головной модуль: ProcessUsersMe                       |
++-------------------------------------------------------+
+   |
+   |-- (1) NewUsersMeCommand:
+   |        in:  UsersMeRequest
+   |        out: (UsersMeCommand, error)
+   |        Failure: ErrMissingBearer
+   |
+   |-- (2) VerifyAccessToken [импорт S2, введён в S5]:
+   |        in:  VerifyAccessTokenInput { AccessTokenRaw, PublicKey, ExpectedIssuer, Now }
+   |        out: (AuthenticatedUserID, error)
+   |        Failure: ErrAccessTokenInvalid
+   |
+   |-- (3) Store.LoadUser:                                 [метод I/O-объекта; *sql.DB инкапсулирован в Store]
+   |        in:  LoadUserInput { UserID }
+   |        out: (User, error)
+   |        Failure: ErrUserNotFound (consistency anomaly), ErrDBLocked
+   |
+   |-- (4) buildResponse:
+   |        in:  User
+   |        out: UserProfileResponse
+   |        Failure: — (чистая функция)
+   |
+   v
+[ ингресс-адаптер: formatResponse ]
+   |
+   |  Success:  UserProfileResponse → 200 + JSON { id, handle }
+   |  Failure:  (адаптер) нет/malformed Authorization → 401 UNAUTHORIZED
+   |            ErrMissingBearer                       → 401 UNAUTHORIZED
+   |            ErrAccessTokenInvalid                  → 401 UNAUTHORIZED
+   |            ErrUserNotFound                        → 500 INTERNAL_ERROR (consistency anomaly)
+   |            ErrDBLocked                            → 503 + Retry-After: 1 + db_locked
+   |            прочее                                  → 500 INTERNAL_ERROR
+   v
+[ HTTP response ]
+```
+
+### Таблица стрелок
+
+| #  | Кто вызывает              | Кого вызывает                   | Передаёт (data)                          | Получает обратно                       | Классы ошибок                                       |
+|----|---------------------------|---------------------------------|------------------------------------------|----------------------------------------|----------------------------------------------------|
+| A  | HTTP runtime              | ингресс-адаптер.parseAuthHeader | HTTP-заголовок `Authorization`           | `UsersMeRequest` или 401 ранний        | нет/malformed → 401 локально (без head)             |
+| B  | ингресс-адаптер           | `ProcessUsersMe`                | `UsersMeRequest`                         | `(UserProfileResponse, error)`          | вся цепочка ниже                                    |
+| 1  | `ProcessUsersMe`          | `NewUsersMeCommand`             | `UsersMeRequest`                         | `(UsersMeCommand, error)`               | `ErrMissingBearer`                                  |
+| 2  | `ProcessUsersMe`          | `VerifyAccessToken` [S2]        | `VerifyAccessTokenInput`                 | `(AuthenticatedUserID, error)`          | `ErrAccessTokenInvalid`                             |
+| 3  | `ProcessUsersMe`          | `Store.LoadUser`                | `LoadUserInput`                          | `(User, error)`                         | `ErrUserNotFound`, `ErrDBLocked`                    |
+| 4  | `ProcessUsersMe`          | `buildResponse`                 | `User`                                   | `UserProfileResponse`                   | — (чистая функция)                                  |
+| C  | ингресс-адаптер           | HTTP runtime (formatResponse)   | `UserProfileResponse` или `error`        | HTTP-ответ                               | маппинг `error` → 4xx/5xx                           |
+
+### Чек-лист сверки 9.3
+
+| # | (1) Тип на стрелке существует | (2) Имя сигнатуры совпадает | (3) Консеквент A ⊆ антецеденту B | (4) Тип ошибки согласован | (5) Покрытие Gherkin | (6) Один data-аргумент |
+|---|-----|-----|-----|-----|-----|-----|
+| A  | [x] HTTP-заголовок (string), `UsersMeRequest` | [x] handler.parseAuthHeader | [x] адаптер требует только синтаксически валидный заголовок Authorization | [x] нет/malformed → 401 локально | [x] неявно (Then 200 включает успешный парсинг заголовка) | [x] один аргумент: `Authorization` header value |
+| B  | [x] `UsersMeRequest`, `(UserProfileResponse, error)` | [x] `ProcessUsersMe` | [x] head принимает любой Request с непустой `AccessTokenRaw` (адаптер уже отсёк пустой/malformed); внутренняя валидация в (1) | [x] все ошибки ниже маппятся адаптером | [x] Then 200 / id-непуст / handle="alice" лежат в Success-ветке B | [x] один data-аргумент `req`; `Deps` отдельно |
+| 1  | [x] `UsersMeRequest`, `UsersMeCommand` | [x] `NewUsersMeCommand` | [x] head передаёт уже распарсенный req | [x] `ErrMissingBearer` маппится адаптером в 401 | [x] неявно (Then 200) | [x] один аргумент `req` |
+| 2  | [x] `VerifyAccessTokenInput`, `AuthenticatedUserID`, `error` | [x] `VerifyAccessToken` (S2 экспорт, введён в S5) | [x] AccessTokenRaw — непустая строка из (1); PublicKey/ExpectedIssuer — из конфига; Now — момент | [x] `ErrAccessTokenInvalid` (общий класс) → 401 | [x] неявно (Then 200) | [x] один data-аргумент `input` |
+| 3  | [x] `LoadUserInput`, `User`, `error` | [x] `Store.LoadUser` | [x] UserID валиден из `AuthenticatedUserID.UserID()` (гарантировано (2)); миграция 0002 применена | [x] `ErrUserNotFound` → 500 (consistency); `ErrDBLocked` → 503; прочее → 500 | [x] Success — Then 200 (загрузка успешна, поля валидны); Failure-ветки — без отдельного Then на этом эндпоинте (см. ниже про Шаг 0) | [x] один data-аргумент `input` (`*sql.DB` инкапсулирован в `Store`, не виден стрелкой) |
+| 4  | [x] `User`, `UserProfileResponse` | [x] `buildResponse` | [x] User собран либо конструктором, либо `UserFromRow` — Handle/ID валидны | [x] — (чистая функция; антецедент гарантирован) | [x] Then «id непуст», «handle=alice» — поля DTO от (4) | [x] один data-аргумент `user` |
+| C  | [x] `UserProfileResponse` или `error` | [x] handler.formatResponse | [x] head вернул либо UserProfileResponse + nil, либо одну из известных ошибок | [x] полный маппинг в таблице ошибок карточки слайса | [x] Then 200 / 401 / 500 / 503+Retry-After | [x] один data-аргумент: либо `UserProfileResponse` (200), либо `error` |
+
+**Все стрелки помечены `[x] согласовано`.**
+
+### Покрытие Gherkin-сценариев графом (пункт 9.3.5)
+
+В Gherkin для эндпоинта S6 — один сценарий «Возвращает данные пользователя из токена» с тремя Then-шагами (`component-tests/features/users.feature`). Все три покрыты цепочкой узлов B → 1 (Success) → 2 (Success) → 3 (Success) → 4 → C (200 + JSON):
+
+- `Тогда ответ 200` — покрыт C (Success-маппинг 200).
+- `И ответ содержит непустое JSON-поле id` — покрыт узлом (4) `buildResponse` (поле `ID = user.ID().String()`).
+- `И ответ содержит JSON-поле handle со значением "alice"` — покрыт узлом (4) `buildResponse` (поле `Handle = user.Handle().Value()`).
+
+Узлов графа, не упомянутых ни одним Then-шагом, **нет**. Failure-ветки (1 `ErrMissingBearer`)/(2 `ErrAccessTokenInvalid`)/(3 `ErrUserNotFound`/`ErrDBLocked`) и адаптерный кейс «нет/malformed Authorization → 401» — пути, которые на этом эндпоинте Gherkin не проверяет (по сознательному решению оператора, как в S5: «отказы — отдельной задачей позже»).
+
+Это **не** мёртвая логика — часть декларированного OpenAPI-контракта (401 `UNAUTHORIZED`, 503 `db_locked`) плюс выбранный маппинг для аномалии согласованности (500 `INTERNAL_ERROR` для `ErrUserNotFound`). Когда сценарии отказа будут дописаны в `users.feature` отдельной задачей, обратная сверка пройдёт без изменения дизайна — все Failure-узлы и маппинги адаптера уже описаны в карточке.
+
+### Сверка по правилу «один аргумент» (пункт 9.3.6) и автономии I/O-объекта (Шаг 6)
+
+Все стрелки графа несут **ровно одну** data-сущность. Зависимости (`PublicKey`, `JWTConfig`, `clock`) на стрелках не отображены — они в `Dependencies:` контракта модуля.
+
+**Сырого `*sql.DB` ни на одной стрелке нет.** Узел (3) — метод I/O-объекта `Store`, инкапсулирующего `*sql.DB` (Шаг 6 + `feedback_io_autonomous_store`). В `Deps` головного модуля — поле `*Store`, не сырой `*sql.DB`.
+
+### Применение подправила «подтип, не guard» (Шаг 3 скилла)
+
+Узел (2) `VerifyAccessToken` — конструктор подтипа `AuthenticatedUserID` (унаследован из S5), инвариант «JWT успешно верифицирован» закреплён в типе. Узел (3) принимает `LoadUserInput`, в котором `UserID` распакован через `AuthenticatedUserID.UserID()` — компилятор не даст обойти верификацию (нет другого способа получить `AuthenticatedUserID`, кроме как через `VerifyAccessToken`).
+
+Никаких новых подтипов S6 не вводит — `User` уже доменная сущность с инвариантами, гарантированными конструктором `NewUser` (свежесозданные) и рехидратором `UserFromRow` (прочитанные из БД). Узел (4) `buildResponse` принимает `User`, не сырые поля — компилятор гарантирует, что DTO собирается только из полностью валидной сущности.
+
+### Замечание о длине пайпа (4 узла, сабфлор скилла)
+
+Пайп головного модуля S6 содержит **4 узла**, что меньше нижней границы рекомендации скилла (5–10). Это сознательное решение оператора и opus'а — то же, что в S5 (3 узла): см. `slices/06-users-me.md` секция «Решения по дизайну → Длина пайпа: 4 узла — сабфлор скилла». Read-by-id — операционно простая операция «верифицировать → загрузить → сериализовать»; натянуть padding-узлы было бы нечестно.
+
+---
+
 ## I/O без юнитов (сверка с Шагом 8.1)
 
 В таблице юнит-тестов карточки слайса 1 нет:
@@ -667,6 +778,14 @@
 - головного модуля `ProcessSessionLogout` (оркестратор-труба, 3 узла).
 
 `VerifyAccessToken` в таблице S5 **есть** (6 юнитов): функция вводится в S5 как аддитивное расширение S2, юнит-формула считается у того, кто вводит модуль. Юнит-тесты `VerifyAccessToken` физически живут в пакете `internal/slice/registrations_finish/` (где определена сама функция).
+
+В таблице юнит-тестов карточки слайса 6 нет:
+- `Store.LoadUser` (метод I/O-объекта — труба, read);
+- ингресс-адаптера (парсинг заголовка Authorization, JSON-сериализация и маппинг — компонентным);
+- головного модуля `ProcessUsersMe` (оркестратор-труба, 4 узла);
+- `VerifyAccessToken` (импорт S2; юнит-тесты уже посчитаны в карточке S5 и физически живут в пакете `internal/slice/registrations_finish/`).
+
+В таблице S6 **есть** только `NewUsersMeCommand` (2 теста: happy + empty Bearer) и `buildResponse` (1 тест: чистый маппинг доменной сущности в DTO). Итого 3 юнит-теста на слайс — минимум за всю реализацию проекта; это нормально, S6 — самый простой read-by-id слайс.
 
 Это соответствует жёсткому правилу Шага 8.1: I/O проверяется только компонентными сценариями, формула юнит-тестов считается только для модулей логики и конструкторов.
 
@@ -732,4 +851,12 @@
 - Sentinel-ошибки: `ErrMissingBearer` определена. `ErrAccessTokenInvalid` — импорт из S2 (общий контракт верификации). `ErrDBLocked`, `ErrDiskFull` — переиспользуются из S1.
 - **Аддитивные расширения S2:** экспортированы `VerifyAccessToken(input VerifyAccessTokenInput) (AuthenticatedUserID, error)`, типы `VerifyAccessTokenInput`, `AuthenticatedUserID` (с методом `UserID()`), sentinel `ErrAccessTokenInvalid`. `VerifyAccessTokenInput` — value-агрегатор; `AuthenticatedUserID` — newtype над `UserID`, создаётся ТОЛЬКО через `VerifyAccessToken` (применение «подтип, не guard»).
 
-Ни одного «потом доопределим». Каталог замкнут для слайсов 1-5.
+**Слайс 6:**
+- `UsersMeRequest` — поле `string` (`AccessTokenRaw`).
+- `UsersMeCommand` — собирается `NewUsersMeCommand`; поле неэкспортируемое (симметрично `SessionLogoutCommand` S5).
+- `LoadUserInput` — value-агрегатор для `Store.LoadUser`.
+- `UserProfileResponse` — DTO ответа OpenAPI (`User { id, handle }`); собирается `buildResponse`.
+- Sentinel-ошибки: `ErrMissingBearer` определена локально (по решению «локальный, не импорт из S5» — обоснование в карточке слайса). `ErrUserNotFound` определена (consistency anomaly после успешной verify). `ErrAccessTokenInvalid` — импорт из S2. `ErrDBLocked` — переиспользуется из S1. `ErrDiskFull` **не применим** к S6 (read-only эндпоинт, SELECT не возвращает `SQLITE_FULL`).
+- **Аддитивных расширений других слайсов S6 не требует.** Все нужные публичные API (`VerifyAccessToken`, `AuthenticatedUserID`, `VerifyAccessTokenInput`, `ErrAccessTokenInvalid`, `User`, `UserID`, `UserFromRow`, `UserIDFromString`, `JWTConfig`) уже экспортированы в S2/S3/S5. S6 — первый слайс, который собирается из существующих публичных API без новых экспортов.
+
+Ни одного «потом доопределим». Каталог замкнут для слайсов 1-6.
